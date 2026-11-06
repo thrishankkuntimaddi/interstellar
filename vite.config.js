@@ -11,6 +11,17 @@ export default defineConfig({
         target: 'https://ssd.jpl.nasa.gov',
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/horizons/, '/api/horizons.api'),
+        // Offline / DNS failure: answer 503 quietly (the app falls back to Kepler elements)
+        configure: (proxy) => {
+          let warned = false;
+          // Vite registers its own (very verbose) error logger after configure(); keep only ours.
+          const on = proxy.on.bind(proxy);
+          proxy.on = (ev, fn) => (ev === 'error' ? proxy : on(ev, fn));
+          on('error', (err, req, res) => {
+            if (!warned) { warned = true; console.warn(`[horizons] NASA/JPL unreachable (${err.code || err.message}); using offline Kepler elements.`); }
+            if (res && !res.headersSent && res.writeHead) { res.writeHead(503, { 'Content-Type': 'text/plain' }); res.end('Horizons unreachable'); }
+          });
+        },
       },
     },
   },

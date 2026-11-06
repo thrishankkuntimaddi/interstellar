@@ -70,7 +70,8 @@ export async function fetchEphemeris(date = new Date()) {
   try {
     if (!import.meta.env.DEV) throw new Error('static hosting: no Horizons proxy');
     const settled = [];
-    for (const k of ORBIT_KEYS) settled.push(await (async () => {
+    let failed = false; // stop after the first failure (offline) instead of trying every planet
+    for (const k of ORBIT_KEYS) settled.push(failed ? null : await (async () => {
       const q = new URLSearchParams({
         format: 'json', COMMAND: `'${HORIZON_IDS[k]}'`, OBJ_DATA: 'NO', MAKE_EPHEM: 'YES', EPHEM_TYPE: 'VECTORS',
         CENTER: "'500@10'", START_TIME: `'${d0}'`, STOP_TIME: `'${d1}'`, STEP_SIZE: "'1 d'", VEC_TABLE: "'1'",
@@ -85,7 +86,7 @@ export async function fetchEphemeris(date = new Date()) {
       const block = j.result.split('$$SOE')[1].split('$$EOE')[0].trim().split('\n')[0];
       const f = block.split(',').map((s) => s.trim());
       return [k, { x: +f[2], y: +f[3], z: +f[4], a: out.positions[k].a }];
-    })().catch(() => null));
+    })().catch(() => { failed = true; return null; }));
     let live = 0;
     for (const r of settled) if (r && Number.isFinite(r[1].x)) { out.positions[r[0]] = r[1]; live++; }
     if (!live) throw new Error('no live vectors');
