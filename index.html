@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interstellar Endurance</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Ccircle cx=%228%22 cy=%228%22 r=%227%22 fill=%22%23ffd49a%22/%3E%3Ccircle cx=%228%22 cy=%228%22 r=%224%22 fill=%22black%22/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500&family=JetBrains+Mono:wght@300;400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <canvas id="gl"></canvas>
+
+  <!-- cinematic overlays -->
+  <div id="letterbox"><div class="bar top"></div><div class="bar bottom"></div></div>
+
+  <div id="hud" class="hidden">
+    <div id="hud-tl">
+      <div id="chapter-kicker">PHASE 1</div>
+      <div id="chapter-title">—</div>
+      <div id="mission-clock">MET 00:00:00</div>
+    </div>
+    <div id="hud-tr">
+      <div class="panel-title">TELEMETRY</div>
+      <div id="telemetry"></div>
+    </div>
+    <div id="hud-bl">
+      <div id="cam-mode">CAM · CINEMATIC</div>
+      <div id="keys">[1] Cinematic &nbsp;[2] Chase &nbsp;[3] Cockpit &nbsp;[4] Free orbit &nbsp;[5] Orbit Gargantua &nbsp;[Esc] Menu &nbsp;[H] HUD &nbsp;[Space] Pause &nbsp;[←/→] Seek &nbsp;[G] Movie / physical black hole &nbsp;[F] Fullscreen</div>
+    </div>
+    <div id="log"></div>
+    <div id="interact" class="hidden">
+      <div id="interact-title">MANUAL DOCKING</div>
+      <div id="interact-body"></div>
+      <div id="interact-meter"><div id="interact-fill"></div></div>
+      <div id="interact-hint"></div>
+    </div>
+    <canvas id="minimap" width="260" height="260" class="hidden"></canvas>
+    <div id="timeline"><div id="timeline-fill"></div><div id="timeline-marks"></div></div>
+  </div>
+
+  <div id="reticle" class="hidden"><div class="ring"></div><div class="dot"></div><div id="target-box"></div></div>
+  <div id="title-card"></div>
+
+  <div id="loader">
+    <div class="loader-inner">
+      <div class="loader-kicker">A PRIVATE JOURNEY · 14 MIN 56 SEC</div>
+      <h1>INTERSTELLAR<br/><span>ENDURANCE</span></h1>
+      <div id="load-bar"><div id="load-fill"></div></div>
+      <div id="load-status">Loading the universe…</div>
+      <div class="loader-note">Best with headphones, fullscreen and a dark room.</div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
