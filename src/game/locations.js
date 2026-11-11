@@ -1,20 +1,21 @@
 import * as THREE from 'three';
 import { ScaledLayer, skyLayer, shipScene, aimSun, skySun } from '../chapters/base.js';
 import { createEarth, createPlanet, createAlienPlanet } from '../world/planets.js';
-import { createEndurance, createRanger } from '../world/ships.js';
+import { createEndurance } from '../world/ships.js';
+import { createStation, createPhobos, phobosRadius } from '../world/fleet.js';
 import { createWormhole } from '../world/wormhole.js';
 import { model } from '../world/models.js';
 import { TEX } from '../world/assets.js';
 import { SKY } from '../world/sky.js';
 import { gargantuaLayer, SYS, RS_KM, RS_M } from '../chapters/gsys.js';
-import { PLANETS, GARGANTUA, fmt, C } from '../data/astro.js';
+import { PLANETS, fmt, C } from '../data/astro.js';
 import { Body } from './flight.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { NOISE } from '../gl/noise.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 
-function orbitalElements(r, v, mu) {
+export function orbitalElements(r, v, mu) {
   const rr = r.length(), vv = v.length();
   const eps = (vv * vv) / 2 - mu / rr;
   const a = -mu / (2 * eps);
@@ -24,87 +25,181 @@ function orbitalElements(r, v, mu) {
 }
 const pointGravity = (mu) => (p, out) => { const r2 = p.lengthSq(), r = Math.sqrt(r2); return out.copy(p).multiplyScalar(-mu / (r2 * r)); };
 
-/** Capture an environment map of the planet-scale scenery from the ship's position (blue Earth bounce etc.). */
-function captureEnv(renderer, scene, posLayerUnits, far) {
-  const pm = new THREE.PMREMGenerator(renderer);
-  const rt = pm.fromScene(scene, 0.02, 0.5, far, { position: posLayerUnits });
-  pm.dispose();
-  return rt.texture;
+function orbitRows(ship, MU, R, speedKm = false) {
+  const el = orbitalElements(ship.pos, ship.vel, MU);
+  return [
+    ['ALTITUDE', fmt.km(ship.pos.length() - R)],
+    ['ORBITAL SPEED', speedKm ? `${fmt.n(ship.vel.length() / 1000, 2)} km/s` : `${fmt.n(ship.vel.length(), 1)} m/s`],
+    ['PERIAPSIS', fmt.km(el.rp - R), el.rp - R < 0 ? 'warn' : ''],
+    ['APOAPSIS', el.ra === Infinity ? 'ESCAPE' : fmt.km(el.ra - R)],
+    ['PERIOD', el.period === Infinity ? '—' : el.period > 7200 ? `${fmt.n(el.period / 3600, 2)} h` : `${fmt.n(el.period / 60, 1)} min`],
+  ];
 }
 
-// ===========================================================================
-// EARTH ORBIT
-// ===========================================================================
-export function buildEarth(ctx) {
-  const MU = PLANETS.earth.gm, RE = PLANETS.earth.radiusKm * 1000, r0 = RE + 400e3, vc = Math.sqrt(MU / r0);
-  const sunDir = V(0.55, 0.42, -0.72).normalize();
+/**
+ * A circular starting orbit (in the XY plane) around one of the Solar System's bodies.
+ * The planet lives in a km-scale background layer; spacecraft live in a metre-scale foreground
+ * with the player's ship at the origin. Every object is its own Keplerian body.
+ */
+function orbitLocation(ctx, def, c) {
+  const P = PLANETS[c.key], MU = P.gm, R = P.radiusKm * 1000, r0 = R + c.alt0, vc = Math.sqrt(MU / r0);
+  const sunDir = c.sunDir.clone().normalize();
   const sky = skyLayer('ours', 1.0);
-  skySun(sky, sunDir, { size: 70, intensity: 30 });
-  const bg = new ScaledLayer({ near: 1, far: 400000, scale: 0.001 });
-  const earth = createEarth({ radius: PLANETS.earth.radiusKm, sunDir, kmPerUnit: 1, segments: 256 });
-  earth.rotation.z = 0.41;
-  bg.scene.add(earth);
-  const moon = new THREE.Mesh(new THREE.SphereGeometry(1737, 96, 48), new THREE.MeshStandardMaterial({ map: TEX.moon, roughness: 1 }));
-  moon.position.set(-250000, 90000, -260000); bg.scene.add(moon);
-  const ml = new THREE.DirectionalLight(0xffffff, 3); ml.position.copy(sunDir).multiplyScalar(1e5); bg.scene.add(ml);
-  const fg = shipScene({ sunDir, env: ctx.envOurs, intensity: 3.4, ambient: 0.05, shadowSize: 40 });
-  fg.userData.hemi.color.set(0x6a8fc4); fg.userData.hemi.groundColor.set(0x0a1a33); fg.userData.hemi.intensity = 0.55; // earthshine from below
+  skySun(sky, sunDir, c.sun);
+  const bg = new ScaledLayer({ near: c.bgNear || 1, far: c.bgFar, scale: 0.001 });
+  const world = c.world(bg.scene, sunDir);
+  const fg = shipScene({ sunDir, env: ctx.envOurs, intensity: c.light, ambient: 0.05, shadowSize: 40 });
+  if (c.shine) { fg.userData.hemi.color.set(c.shine[0]); fg.userData.hemi.groundColor.set(c.shine[1]); fg.userData.hemi.intensity = c.shine[2]; }
   const fgLayer = { scene: fg, near: 0.3, far: 2e5 };
-
+  const gravity = pointGravity(MU);
   const along = (d, dh = 0, dz = 0) => { const r = r0 + dh, th = d / r; return [V(r * Math.sin(th), r * Math.cos(th), dz), V(Math.cos(th), -Math.sin(th), 0).multiplyScalar(Math.sqrt(MU / r))]; };
   const objs = [];
   const add = (id, name, mesh, d, dh, dz, radius, opts = {}) => {
     const [p, v] = along(d, dh, dz); const b = new Body(p, v);
     fg.add(mesh); objs.push({ id, name, mesh, body: b, radius, ...opts }); return objs[objs.length - 1];
   };
-  const end = createEndurance(); end.userData.flood.intensity = 12;
-  end.quaternion.setFromUnitVectors(V(0, 0, 1), V(-1, 0, 0));
-  add('endurance', 'ENDURANCE', end, 380, 0, 0, 40, { dock: true });
-  const iss = model('iss') || new THREE.Object3D();
-  add('iss', 'ISS', iss, 3200, 60, 250, 60);
-  const hub = model('hubble') || new THREE.Object3D();
-  hub.rotation.set(0.4, 1.2, 0.2);
-  add('hubble', 'HUBBLE', hub, 5200, 600, -400, 12);
-
-  const ranger = createRanger(); fg.add(ranger);
-
+  const extra = c.things?.({ add, fg, MU, R, r0, objs }) || {};
+  const ship = def.build(); fg.add(ship);
   let simT = 0;
-  const loc = {
-    id: 'earth', name: 'Earth Orbit', kicker: 'FREE FLIGHT · LOW EARTH ORBIT', units: 'm',
-    layers: [sky, bg, fgLayer], sunDir, ranger, objs, scaleToM: 1,
-    ship: { pos: V(0, r0, 0), vel: V(vc, 0, 0), quat: new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.PI / 2) },
-    shipParams: { accel: 12, boost: 4, rcs: 2.5, retro: 6 },
-    gravity: pointGravity(MU),
-    music: 140,
-    update(ship, dt, t) {
+  return {
+    id: c.id, name: c.name, kicker: c.kicker, units: 'm', bodyName: P.name,
+    layers: [sky, bg, fgLayer], fg, sunDir, ranger: ship, objs, mu: MU, R, atmo: c.atmo,
+    ship: { pos: V(0, r0, 0), vel: V(vc, 0, 0), quat: new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.PI / 2).multiply(new THREE.Quaternion().setFromAxisAngle(V(1, 0, 0), c.pitch || 0)) },
+    shipParams: c.shipParams || { accel: 12, boost: 4, rcs: 2.5, retro: 6 },
+    gravity: extra.gravity || gravity, music: c.music, hazard: extra.hazard,
+    update(s, dt, t) {
       simT += dt;
-      for (const o of objs) { o.body.step(dt, this.gravity); o.mesh.position.copy(o.body.pos).sub(ship.pos); }
-      earth.rotation.y = 0.8 + simT * 7.2921159e-5; // sidereal rate
-      earth.userData.update(t);
+      for (const o of objs) { o.body.step(dt, gravity); o.mesh.position.copy(o.body.pos).sub(s.pos); o.mesh.userData.blink?.(t); }
+      world(simT, t);
       sky.sky.userData.update(t);
-      bg.origin.copy(ship.pos).multiplyScalar(0.001);
+      bg.origin.copy(s.pos).multiplyScalar(0.001);
       aimSun(fg, sunDir, V());
-      end.userData.blink?.(t);
+      extra.update?.(s, dt, t, this);
     },
     afterCamera(cam) { bg.sync(cam); sky.camera = bg.camera; },
-    collide(ship) { return ship.pos.length() < RE + 85e3 ? 'Re-entry without a heat-shield attitude. The Ranger broke up over the Pacific.' : null; },
-    telemetry(ship, tgt) {
-      const el = orbitalElements(ship.pos, ship.vel, MU);
-      return [
-        ['ALTITUDE', fmt.km(ship.pos.length() - RE)],
-        ['ORBITAL SPEED', `${fmt.n(ship.vel.length(), 1)} m/s`],
-        ['PERIAPSIS', fmt.km(el.rp - RE), el.rp - RE < 120e3 ? 'warn' : ''],
-        ['APOAPSIS', el.ra === Infinity ? 'ESCAPE' : fmt.km(el.ra - RE)],
-        ['PERIOD', el.period === Infinity ? '—' : `${fmt.n(el.period / 60, 1)} min`],
-      ];
-    },
-    objectives: [
-      { text: 'Fly within 200 m of the International Space Station', check: (s, L) => L.dist('iss') < 200 },
-      { text: 'Inspect the Hubble Space Telescope (within 120 m)', check: (s, L) => L.dist('hubble') < 120 },
-      { text: 'Dock with the Endurance: collar to hub port, < 0.5 m/s', check: (s) => !!s.docked },
-    ],
+    collide(s) { return s.pos.length() < R + c.floor ? c.floorMsg : null; },
+    telemetry(s) { return [...orbitRows(s, MU, R, vc > 5000), ...(extra.telemetry?.(s) || [])]; },
   };
-  return loc;
+}
+
+// ===========================================================================
+// EARTH ORBIT
+// ===========================================================================
+export function buildEarth(ctx, def) {
+  return orbitLocation(ctx, def, {
+    id: 'earth', key: 'earth', name: 'Earth Orbit', kicker: 'FREE FLIGHT · LOW EARTH ORBIT', alt0: 400e3, music: 140,
+    sunDir: V(0.55, 0.42, -0.72), sun: { size: 70, intensity: 30 }, bgFar: 400000, light: 3.4, shine: [0x6a8fc4, 0x0a1a33, 0.55],
+    atmo: { top: 125e3, kill: 72e3 }, floor: 72e3, floorMsg: 'Re-entry too steep. The hull broke up over the Pacific.',
+    world(scene, sunDir) {
+      const earth = createEarth({ radius: PLANETS.earth.radiusKm, sunDir, kmPerUnit: 1, segments: 256 });
+      earth.rotation.z = 0.41; scene.add(earth);
+      const moon = new THREE.Mesh(new THREE.SphereGeometry(1737, 96, 48), new THREE.MeshStandardMaterial({ map: TEX.moon, roughness: 1 }));
+      moon.position.set(-250000, 90000, -260000); scene.add(moon);
+      const ml = new THREE.DirectionalLight(0xffffff, 3); ml.position.copy(sunDir).multiplyScalar(1e5); scene.add(ml);
+      return (simT, t) => { earth.rotation.y = 0.8 + simT * 7.2921159e-5; earth.userData.update(t); };
+    },
+    things({ add }) {
+      const end = createEndurance(); end.userData.flood.intensity = 12;
+      end.quaternion.setFromUnitVectors(V(0, 0, 1), V(-1, 0, 0));
+      add('endurance', 'ENDURANCE', end, 380, 0, 0, 40, { dock: { port: V(0, 0, 7.9), axis: V(0, 0, 1) }, scan: 400 });
+      add('iss', 'ISS', model('iss') || new THREE.Object3D(), 3200, 60, 250, 60, { scan: 500 });
+      const hub = model('hubble') || new THREE.Object3D(); hub.rotation.set(0.4, 1.2, 0.2);
+      add('hubble', 'HUBBLE', hub, 5200, 600, -400, 12, { scan: 250 });
+    },
+  });
+}
+
+// ===========================================================================
+// THE MOON — 100 km low lunar orbit
+// ===========================================================================
+export function buildMoon(ctx, def) {
+  return orbitLocation(ctx, def, {
+    id: 'moon', key: 'moon', name: 'The Moon', kicker: 'FREE FLIGHT · LOW LUNAR ORBIT', alt0: 100e3, music: 205,
+    sunDir: V(0.35, 0.3, -0.89), sun: { size: 70, intensity: 30 }, bgFar: 9e5, light: 3.4, shine: [0x8a8a86, 0x1c1c1c, 0.32],
+    floor: 1500, floorMsg: 'Impact. A new crater on the lunar surface.',
+    shipParams: { accel: 8, boost: 3, rcs: 2.5, retro: 5 },
+    world(scene, sunDir) {
+      const moon = new THREE.Mesh(new THREE.SphereGeometry(PLANETS.moon.radiusKm, 384, 192), new THREE.MeshStandardMaterial({ map: TEX.moon, bumpMap: TEX.moon, bumpScale: 1.2, roughness: 0.97, metalness: 0, color: 0xd0d0d0 }));
+      moon.rotation.set(0.2, 2.2, 0); scene.add(moon);
+      const sl = new THREE.DirectionalLight(0xfff6ea, 3.6); sl.position.copy(sunDir).multiplyScalar(1e5); scene.add(sl);
+      const earth = createEarth({ radius: PLANETS.earth.radiusKm, sunDir, kmPerUnit: 1, segments: 96 });
+      earth.position.copy(V(-0.55, 0.3, 0.78).normalize().multiplyScalar(384400)); earth.rotation.z = 0.41; scene.add(earth);
+      return (simT, t) => { earth.rotation.y = 2.1 + simT * 7.2921159e-5; earth.userData.update(t); };
+    },
+    things({ add }) {
+      const st = createStation();
+      st.quaternion.setFromUnitVectors(V(0, 0, 1), V(-1, 0, 0));
+      add('gateway', 'GATEWAY', st, 1500, 80, 60, 26, { dock: { port: st.userData.port, axis: st.userData.axis }, scan: 400 });
+    },
+  });
+}
+
+// ===========================================================================
+// MARS — co-orbiting with Phobos, 5,990 km above the surface
+// ===========================================================================
+export function buildMars(ctx, def) {
+  const MU_PH = 7.087e5;
+  return orbitLocation(ctx, def, {
+    id: 'mars', key: 'mars', name: 'Mars · Phobos', kicker: 'FREE FLIGHT · MARS · PHOBOS', alt0: 9376e3 - PLANETS.mars.radiusKm * 1000, music: 262,
+    sunDir: V(-0.45, 0.35, -0.82), sun: { size: 50, intensity: 22 }, bgFar: 2e5, light: 2.9, shine: [0xc98a5e, 0x24140c, 0.3],
+    atmo: { top: 120e3, kill: 50e3 }, floor: 50e3, floorMsg: 'Entered the Martian atmosphere at orbital speed.',
+    shipParams: { accel: 8, boost: 3, rcs: 2.5, retro: 5 },
+    world(scene, sunDir) {
+      const mars = createPlanet({ map: TEX.mars, radius: PLANETS.mars.radiusKm, sunDir, kmPerUnit: 1, sun: 2.2, limb: 0.25, segments: 256,
+        atmosphere: { thicknessKm: 90, Hkm: 11, beta: [19e-3, 12e-3, 6.5e-3], mie: 30e-3, intensity: 5 } });
+      mars.rotation.z = 0.44; scene.add(mars);
+      return (simT) => { mars.rotation.y = 1.3 + simT * (2 * Math.PI / (PLANETS.mars.rotH * 3600)); };
+    },
+    things({ add, MU }) {
+      const ph = add('phobos', 'PHOBOS', createPhobos(), 42000, 0, 0, 9000, { surface: phobosRadius, scan: 30000, solid: true });
+      const marsG = pointGravity(MU), g = V(), d = V(), x = V(), y = V(), z = V(0, 0, 1), m = new THREE.Matrix4(), inv = new THREE.Quaternion();
+      let d0 = null;
+      const lock = () => { x.copy(ph.body.pos).normalize().negate(); y.crossVectors(z, x).normalize(); m.makeBasis(x, y, z); ph.mesh.quaternion.setFromRotationMatrix(m); };
+      lock();
+      return {
+        gravity(p, out) { marsG(p, out); d.copy(p).sub(ph.body.pos); const r = Math.max(d.length(), 8000); return out.addScaledVector(d, -MU_PH / (r * r * r)); },
+        update(s, dt, t, loc) {
+          lock(); // tidally locked: the long axis always points at Mars
+          d.copy(s.pos).sub(ph.body.pos).applyQuaternion(inv.copy(ph.mesh.quaternion).invert()).normalize();
+          if (!d0) d0 = d.clone(); else if (d.dot(d0) < -0.6 && loc.flags) loc.flags.farSide = true;
+        },
+        telemetry(s) {
+          d.copy(s.pos).sub(ph.body.pos); const dist = d.length();
+          const alt = dist - phobosRadius(g.copy(d).applyQuaternion(inv.copy(ph.mesh.quaternion).invert()));
+          const vr = g.copy(s.vel).sub(ph.body.vel);
+          return [['PHOBOS ALTITUDE', fmt.km(Math.max(0, alt)), alt < 300 ? 'ok' : ''], ['DESCENT RATE', `${fmt.n(-vr.dot(d) / dist, 2)} m/s`, -vr.dot(d) / dist > 4 && alt < 2000 ? 'warn' : ''], ['PHOBOS GRAVITY', `${fmt.n((MU_PH / Math.max(dist, 8000) ** 2) * 1000, 2)} mm/s²`]];
+        },
+      };
+    },
+  });
+}
+
+// ===========================================================================
+// JUPITER — 14,000 km above the cloud tops, with Juno
+// ===========================================================================
+export function buildJupiter(ctx, def) {
+  const RJ = PLANETS.jupiter.radiusKm * 1000;
+  const flux = (s) => Math.pow(RJ * 1.2 / s.pos.length(), 7); // relative to the starting orbit
+  return orbitLocation(ctx, def, {
+    id: 'jupiter', key: 'jupiter', name: 'Jupiter', kicker: 'FREE FLIGHT · JUPITER', alt0: 14000e3, pitch: 0.38, music: 278,
+    sunDir: V(0.7, 0.2, -0.69), sun: { size: 40, intensity: 16 }, bgNear: 5, bgFar: 4e6, light: 2.6, shine: [0xd8b890, 0x2a1c12, 0.35],
+    atmo: { top: 1500e3, kill: 250e3 }, floor: 250e3, floorMsg: 'Crushed in Jupiter’s atmosphere.',
+    shipParams: { accel: 12, boost: 5, rcs: 2.5, retro: 6 },
+    world(scene, sunDir) {
+      const jup = createPlanet({ map: TEX.jupiter, radius: PLANETS.jupiter.radiusKm, sunDir, kmPerUnit: 1, sun: 1.8, limb: 0.5, segments: 256 });
+      jup.rotation.z = 0.054; scene.add(jup);
+      return (simT) => { jup.rotation.y = 0.6 + simT * (2 * Math.PI / (PLANETS.jupiter.rotH * 3600)); };
+    },
+    things({ add }) {
+      const juno = model('juno') || new THREE.Object3D(); juno.rotation.set(0.5, 0.3, 0.2);
+      const o = add('juno', 'JUNO', juno, 3000, 120, -150, 10, { scan: 300 });
+      return {
+        update(s, dt) { o.mesh.rotateY(dt * 0.209); }, // Juno spins at 2 rpm
+        telemetry(s) { const f = flux(s); return [['RADIATION FLUX', `× ${fmt.n(f, 2)}`, f > 2.2 ? 'warn' : '']]; },
+        hazard(s) { const f = flux(s); return f > 2.2 ? { dmg: (f - 2.2) * 0.9, label: 'RADIATION' } : null; },
+      };
+    },
+  });
 }
 
 // ===========================================================================
@@ -123,7 +218,7 @@ function iceChunk(seed) {
   return g;
 }
 
-export function buildSaturn(ctx) {
+export function buildSaturn(ctx, def) {
   const MU = PLANETS.saturn.gm, RS = PLANETS.saturn.radiusKm * 1000, R = PLANETS.saturn.rings;
   const r0 = 131000e3, vc = Math.sqrt(MU / r0);
   const sunDir = V(0.8, 0.28, 0.53).normalize();
@@ -170,14 +265,14 @@ export function buildSaturn(ctx) {
     fg.add(mesh); objs.push({ id, name, mesh, body: b, radius, ...opts }); return objs[objs.length - 1];
   };
   const cas = model('cassini') || new THREE.Object3D(); cas.rotation.set(0.3, 0.8, 0.1);
-  add('cassini', 'CASSINI', cas, 2600, 180, 8);
+  add('cassini', 'CASSINI', cas, 2600, 180, 8, { scan: 250 });
   const worm = createWormhole({ radius: 1000 });
-  add('wormhole', 'WORMHOLE', worm, 34000, 2600, 1000, { portal: 'gargantua' });
-  const ranger = createRanger(); fg.add(ranger);
+  add('wormhole', 'WORMHOLE', worm, 34000, 2600, 1000, { portal: 'gargantua', scan: 20000 });
+  const ranger = def.build(); fg.add(ranger);
   let simT = 0;
   const loc = {
     id: 'saturn', name: 'Saturn', kicker: 'FREE FLIGHT · SATURN · A RING', units: 'm',
-    layers: [sky, bg, fgLayer], sunDir, ranger, objs, scaleToM: 1,
+    layers: [sky, bg, fgLayer], fg, sunDir, ranger, objs, mu: MU, R: RS, atmo: { top: 1200e3, kill: 300e3 }, bodyName: 'Saturn',
     ship: { pos: V(r0, 90, 0), vel: V(0, 0, -vc), quat: new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.PI) },
     shipParams: { accel: 12, boost: 5, rcs: 2.5, retro: 6 },
     gravity: pointGravity(MU),
@@ -235,11 +330,6 @@ export function buildSaturn(ctx) {
         ['PERIAPSIS', fmt.km(el.rp - RS), el.rp < RS + 300e3 ? 'warn' : ''],
       ];
     },
-    objectives: [
-      { text: 'Descend into the A ring (within 60 m of the ring plane)', check: (s) => Math.abs(s.pos.y) < 60 },
-      { text: 'Fly within 60 m of Cassini', check: (s, L) => L.dist('cassini') < 60 },
-      { text: 'Enter the wormhole', check: (s, L) => L.dist('wormhole') < 1000 },
-    ],
   };
   return loc;
 }
@@ -248,7 +338,7 @@ export function buildSaturn(ctx) {
 // GARGANTUA — free flight in units of the Schwarzschild radius
 // ===========================================================================
 export const C_GAME = 0.6; // r_s per second treated as the speed of light in this scaled sandbox
-export function buildGargantua(ctx) {
+export function buildGargantua(ctx, def) {
   const G = gargantuaLayer();
   const GM = 0.5;
   const worm = createWormhole({ radius: 0.3 });
@@ -267,19 +357,19 @@ export function buildGargantua(ctx) {
   const fg = shipScene({ sunDir, env: ctx.envOther, intensity: 2.6, ambient: 0.12, shadowSize: 30 });
   fg.userData.sun.color.setRGB(1, 0.82, 0.62);
   const fgLayer = { scene: fg, near: 0.3, far: 5e4 };
-  const ranger = createRanger(); fg.add(ranger);
+  const ranger = def.build(); fg.add(ranger);
   const objs = [
-    { id: 'gargantua', name: 'GARGANTUA', pos: V(0, 0, 0), radius: 1 },
-    { id: 'miller', name: 'MILLER', pos: SYS.miller.clone(), radius: 0.004, planet: 'miller' },
-    { id: 'mann', name: 'MANN', pos: SYS.mann.clone(), radius: 0.004, planet: 'mann' },
-    { id: 'edmunds', name: 'EDMUNDS', pos: SYS.edmunds.clone(), radius: 0.004, planet: 'edmunds' },
-    { id: 'wormhole', name: 'WORMHOLE', pos: SYS.wormhole.clone(), radius: 0.3, portal: 'saturn' },
+    { id: 'gargantua', name: 'GARGANTUA', pos: V(0, 0, 0), radius: 1, scan: 40 },
+    { id: 'miller', name: 'MILLER', pos: SYS.miller.clone(), radius: 0.004, planet: 'miller', scan: 0.02 },
+    { id: 'mann', name: 'MANN', pos: SYS.mann.clone(), radius: 0.004, planet: 'mann', scan: 0.02 },
+    { id: 'edmunds', name: 'EDMUNDS', pos: SYS.edmunds.clone(), radius: 0.004, planet: 'edmunds', scan: 0.02 },
+    { id: 'wormhole', name: 'WORMHOLE', pos: SYS.wormhole.clone(), radius: 0.3, portal: 'saturn', scan: 6 },
   ];
   const clock = { proper: 0, earth: 0, minR: 1e9 };
   const REAL_PER_GAME_S = (RS_M / C.c) / C_GAME; // one sandbox second ≈ this many real seconds
   const loc = {
     id: 'gargantua', name: 'Gargantua', kicker: 'FREE FLIGHT · GARGANTUA SYSTEM', units: 'rs',
-    layers: [G, fgLayer], sunDir, ranger, objs: [], points: objs, scaleToM: RS_M, bhLayer: G,
+    layers: [G, fgLayer], fg, sunDir, ranger, objs: [], points: objs, bhLayer: G,
     ship: { pos: SYS.wormhole.clone().add(V(0, -0.2, -1.6)), vel: V(0, 0, -0.02), quat: new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.PI) },
     shipParams: { accel: 0.012, boost: 8, rcs: 0.004, retro: 0.008, rate: 0.9 },
     gravity: (p, out) => { const r = p.length(); const k = -GM / Math.max((r - 1) * (r - 1), 1e-4) / r; return out.copy(p).multiplyScalar(k); },
@@ -328,14 +418,8 @@ export function buildGargantua(ctx) {
         ['CLOSEST APPROACH', `${fmt.n(clock.minR, 2)} r_s`],
       ];
     },
-    objectives: [
-      { text: 'Fall to within 10 r_s of Gargantua', check: (s) => s.pos.length() < 10 },
-      { text: 'Survive a pass below 3 r_s (inside the ISCO)', check: (s) => clock.minR < 3 && s.pos.length() > 4 },
-      { text: 'Reach Miller’s planet', check: (s, L) => L.dist('miller') < 0.004 },
-      { text: 'Cross the event horizon (one-way trip)', check: () => clock.horizon },
-    ],
   };
   return loc;
 }
 
-export const LOCATIONS = { earth: buildEarth, saturn: buildSaturn, gargantua: buildGargantua };
+export const LOCATIONS = { earth: buildEarth, moon: buildMoon, mars: buildMars, jupiter: buildJupiter, saturn: buildSaturn, gargantua: buildGargantua };

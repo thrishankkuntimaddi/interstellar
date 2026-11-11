@@ -8,28 +8,46 @@ Three.js + custom GLSL. Every scene is a pure function of the music's time, so s
 npm install
 npm run dev        # http://127.0.0.1:5173
 ```
-Use Chrome, fullscreen (F), headphones. The main menu offers **The Journey** (the 15-minute film), **Free Flight** (fly the Ranger yourself), **Settings** and **Controls**. Esc opens the menu at any time.
-`?t=455` jumps straight into the journey at a given second; `?explore=earth|saturn|gargantua` starts free flight.
+Use Chrome, fullscreen (F), headphones. The main menu offers **Flight Operations** (the game), **Hangar**, **Pilot Record**, **The Journey** (the 15-minute film), **Settings** and **Controls**. Esc opens the menu at any time.
+`?t=455` jumps straight into the journey at a given second.
 
-## Free flight
-Pilot a Ranger with six-degree-of-freedom Newtonian physics. Click to capture the mouse, which works as a virtual stick for pitch and yaw.
+## Flight Operations (the game)
+Pick a world, a contract and a spacecraft, then fly it with six-degree-of-freedom Newtonian physics. Click to capture the mouse, which works as a virtual stick for pitch and yaw. Progress (XP, rank, stars, achievements, codex) is saved in this browser.
+
+**Worlds**
+| World | What is there |
+|---|---|
+| Earth orbit | 400 km orbit (μ⊕ = 3.986 × 10¹⁴ m³/s²) with the Endurance, ISS and Hubble, each on its own Keplerian orbit. Atmosphere below 125 km heats and drags you. |
+| The Moon | 100 km low lunar orbit, a dockable Gateway station, Earth in the sky. |
+| Mars · Phobos | Co-orbiting Phobos at 9,376 km. Phobos has its own gravity (μ = 7.09 × 10⁵ m³/s²) and you can land on it under 4 m/s. |
+| Jupiter | 14,000 km above the cloud tops with Juno. Radiation flux rises steeply as you descend and damages the hull. |
+| Saturn | Inside the A ring among ice boulders, with Cassini and the wormhole. |
+| Gargantua | Distances in Schwarzschild radii, Paczyński–Wiita gravity, a speed of light, ship and Earth clocks at dτ/dt = √(1 − r_s/r)·√(1 − v²/c²). Reached through the wormhole. |
+
+**Spacecraft** (Hangar): Ranger (all-rounder), Pilgrim (capsule: strong RCS and heat shield, docks nose-first), Lander (four engines, 20 km/s of Δv, tough), Kestrel (fast, agile, fragile). Each has its own thrust, turn rate, Δv budget, hull strength and heat tolerance.
+
+**Career**: 18 contracts scored one to three stars against a par time, hull condition and restarts; XP and seven ranks unlock ships and worlds; 20 achievements; a codex filled by scanning objects; a logbook. *Settings → Gameplay* has unlimited propellant, an indestructible hull and a sandbox switch that unlocks everything.
+
+**Systems**: propellant is a Δv budget (every m/s of thrust is a m/s spent), hull damage from collisions, hard landings, heating and radiation, resupply while docked, an orbit map with your conic and apsides, and a nav computer that quotes the real Hohmann transfer between worlds.
 
 | Key | Action |
 |---|---|
-| W / S | Main engines / retro · **Shift** boost |
-| A / D · R / F | Lateral · vertical RCS |
-| Q / E | Roll |
+| W / S · Shift | Main engines / retro · boost |
+| A / D · R / F · Q / E | Lateral · vertical RCS · roll |
+| [ / ] · Z · Backspace | Throttle hold ∓10 % · full · cut |
 | X | Match velocity with the target |
-| Tab | Cycle target |
-| C | Camera: chase · cockpit · orbit · cinematic · target |
+| 1 / 2 · 3 / 4 · 5 · 6 · 0 | Autopilot hold: prograde / retrograde · toward / away from target · radial out · brake · off |
+| Tab · B | Cycle target · scan it |
+| M · N | Orbit map · nav computer (travel to another world) |
+| T · , · . | Time warp ×1 / ×10 / ×100 / ×1000 (while coasting) |
+| C · mouse wheel | Camera: chase · cockpit · orbit · cinematic · target · zoom |
+| L · K · H | Floodlights · photograph (PNG) · HUD |
+| J · P · U | Next contract · restart · undock |
 | V | Flight assist on/off (pure Newtonian rotation when off) |
-| T | Time warp ×1 / ×10 / ×100 (only while coasting) |
-| U · P | Undock · respawn |
 
-Locations and missions:
-- **Earth orbit:** a real 400 km orbit (μ⊕ = 3.986 × 10¹⁴ m³/s²). The Endurance, the ISS and Hubble each follow their own Keplerian orbit, so relative drift is real orbital mechanics. Missions: reach the ISS, inspect Hubble, then dock with the Endurance (collar to port, under 0.5 m/s, within 12°). The HUD shows live apoapsis and periapsis.
-- **Saturn:** inside the A ring, among co-orbiting ice boulders (they collide), with Cassini and the wormhole. Flying into the wormhole takes you to Gargantua.
-- **Gargantua:** distances in Schwarzschild radii, pseudo-Newtonian gravity (Paczyński–Wiita: it has an ISCO and captures you), a speed of light, and ship and Earth clocks running at dτ/dt = √(1 − r_s/r)·√(1 − v²/c²). Missions: dive inside 10 r_s, survive below 3 r_s, reach Miller's planet, cross the horizon. The wormhole takes you back to Saturn.
+A standard gamepad also works: sticks for attitude and RCS, triggers for engines, bumpers for roll.
+
+URL shortcuts: `?explore=earth|moon|mars|jupiter|saturn|gargantua`, plus optional `&mission=<id>` and `&ship=ranger|capsule|lander|scout`.
 
 ## Settings
 Quality presets (Low / Medium / High / Ultra) plus individual controls: resolution scale, dynamic resolution, shadow map size, black-hole ray-tracing quality, bloom, lens flares, film grain, 8K Earth texture, FOV, camera shake, letterbox, HUD, radio dialogue, movie or physical Gargantua, mouse sensitivity, invert pitch, flight assist, music and engine volume. Settings are saved in this browser.

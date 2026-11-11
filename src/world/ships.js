@@ -346,6 +346,6 @@ export function createCockpit() {
   const light = new THREE.PointLight(0x9fd8ff, 0.6, 3, 2); light.position.set(0, -0.5, z + 0.6); g.add(light);
   g.add(new THREE.AmbientLight(0xffffff, 0.06));
   const sunL = new THREE.DirectionalLight(0xfff4e6, 2.0); g.add(sunL, sunL.target);
-  g.userData = { sunL };
+  g.userData = { sunL, mfd: { c, cx, tex: stex } };
   return g;
 }

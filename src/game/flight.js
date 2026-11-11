@@ -3,52 +3,79 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { settings } from '../core/settings.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
-const _a = V(), _b = V(), _q = new THREE.Quaternion();
+const _a = V(), _b = V(), _c = V(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 
 /**
  * Six-degree-of-freedom spacecraft. State is double precision (plain JS numbers in Vector3),
  * integrated with velocity-Verlet under an external gravity field supplied by the location.
- * Units are whatever the location uses (metres, or r_s at Gargantua) — the location supplies
- * the engine accelerations in those units.
+ * Units are whatever the location uses (metres, or r_s at Gargantua): the location supplies the
+ * baseline accelerations, the ship definition scales them.
+ * Propellant is tracked as a Δv budget: every m/s of thrust applied is a m/s spent (Tsiolkovsky, integrated).
  */
+export const SAS_MODES = ['OFF', 'PROGRADE', 'RETROGRADE', 'TARGET', 'ANTI-TARGET', 'RADIAL OUT', 'BRAKE'];
 export class Ship {
-  constructor({ accel = 12, boost = 4, rcs = 3, retro = 6, rate = 0.9, rollRate = 1.2 } = {}) {
+  constructor(def, base = {}, dvBudget = 12000) {
+    const { accel = 12, boost = 4, rcs = 3, retro = 6, rate = 0.9, rollRate = 1.2 } = base;
+    this.def = def;
     this.pos = V(); this.vel = V(); this.quat = new THREE.Quaternion();
     this.w = V(); // body angular velocity (rad/s): x pitch, y yaw, z roll
-    this.p = { accel, boost, rcs, retro, rate, rollRate };
-    this.thrustLocal = V(); this.gLoad = 0; this.main = 0; this.rcsLevel = 0; this.boosting = false;
+    this.p = { accel: accel * def.accel, boost: boost * def.boost, rcs: rcs * def.rcs, retro: retro * def.accel, rate: rate * def.rate, rollRate: rollRate * def.rate };
+    this.thrustLocal = V(); this.rcsLocal = V(); this.torque = V(); this.gLoad = 0; this.main = 0; this.rcsLevel = 0; this.boosting = false;
     this.fa = settings.flightAssist;
-    this.docked = null;
-    this.mouse = { x: 0, y: 0 };
+    this.docked = null; this.landed = null;
+    this.mouse = { x: 0, y: 0 }; this.stick = { x: 0, y: 0 };
+    this.fuel = 1; this.dvBudget = dvBudget; this.dvSpent = 0;
+    this.hull = def.hull; this.throttle = 0; this.sas = 0; this.lights = false;
   }
   forward(out = V()) { return out.set(0, 0, 1).applyQuaternion(this.quat); }
   up(out = V()) { return out.set(0, 1, 0).applyQuaternion(this.quat); }
+  get dv() { return this.fuel * this.dvBudget; }
+  damage(n) { if (!settings.invulnerable) this.hull = Math.max(0, this.hull - n); }
+  refill() { this.fuel = 1; this.hull = this.def.hull; }
 
-  /** keys: input set; dt: seconds; gravity(pos, out): acceleration; match: relative velocity to null (or null) */
-  control(input, dt, matchVel) {
+  /** input.down(key); matchVel: relative velocity to null with X (or null); sasDir: world direction to hold (or null) */
+  control(input, dt, matchVel, sasDir) {
     const k = (c) => input.down(c);
     const p = this.p;
-    this.boosting = k('shift') && k('w');
-    const t = this.thrustLocal.set(0, 0, 0);
-    if (k('w')) t.z += p.accel * (this.boosting ? p.boost : 1);
-    if (k('s')) t.z -= p.retro;
-    if (k('d')) t.x -= p.rcs; if (k('a')) t.x += p.rcs;
-    if (k('r')) t.y += p.rcs; if (k('f')) t.y -= p.rcs;
-    this.main = Math.min(1, Math.max(0, t.z) / (p.accel * p.boost) * 1.5 + (k('w') ? 0.35 : 0));
-    this.rcsLevel = (k('a') || k('d') || k('r') || k('f') || k('s') || k('q') || k('e') ? 1 : 0);
+    const dry = this.fuel <= 0 && !settings.infiniteFuel;
+    const fwd = dry ? 0 : Math.max(k('w') ? 1 : 0, this.throttle);
+    this.boosting = k('shift') && fwd > 0;
+    const t = this.thrustLocal.set(0, 0, 0), r = this.rcsLocal.set(0, 0, 0);
+    if (!dry) {
+      if (k('s')) r.z -= p.retro;
+      if (k('d')) r.x -= p.rcs; if (k('a')) r.x += p.rcs;
+      if (k('r')) r.y += p.rcs; if (k('f')) r.y -= p.rcs;
+    }
+    t.copy(r); t.z += fwd * p.accel * (this.boosting ? p.boost : 1);
+    this.main = fwd > 0 ? Math.min(1, fwd * (this.boosting ? 1 : 0.55) + 0.1) : 0;
     const world = _a.copy(t).applyQuaternion(this.quat);
-    if (matchVel && k('x')) {
+    if (matchVel && k('x') && !dry) {
       // automatic velocity matching (RCS + main), capped at the main-engine acceleration
       const dv = _b.copy(matchVel).negate();
       const mag = dv.length();
-      if (mag > 1e-9) world.add(dv.multiplyScalar(Math.min(p.accel, mag / dt) / mag));
-      this.rcsLevel = 1;
+      if (mag > 1e-9) { world.add(dv.multiplyScalar(Math.min(p.accel, mag / dt) / mag)); r.add(_c.copy(dv).applyQuaternion(_q2.copy(this.quat).invert())); }
     }
+    if (this.docked) world.set(0, 0, 0);
+    this.rcsLevel = r.lengthSq() > 0 || k('q') || k('e') ? 1 : 0;
     this.gLoad = world.length();
-    // rotation: mouse = rate command (virtual stick), keys = roll
+    // propellant
+    const spent = this.gLoad * dt;
+    if (spent > 0 && !settings.infiniteFuel) { this.fuel = Math.max(0, this.fuel - spent / this.dvBudget); this.dvSpent += spent; }
+    // rotation: mouse / stick = rate command (virtual stick), keys = roll, SAS = attitude hold
     const inv = settings.invertY ? -1 : 1;
-    const cmd = V(-this.mouse.y * inv * p.rate, -this.mouse.x * p.rate, ((k('e') ? 1 : 0) - (k('q') ? 1 : 0)) * p.rollRate);
-    if (this.fa) this.w.lerp(cmd, 1 - Math.exp(-dt * 4));
+    const sx = this.mouse.x + this.stick.x, sy = this.mouse.y + this.stick.y;
+    const cmd = V(-sy * inv * p.rate, -sx * p.rate, ((k('e') ? 1 : 0) - (k('q') ? 1 : 0)) * p.rollRate);
+    const manual = Math.hypot(sx, sy) > 0.06;
+    if (sasDir && !manual) {
+      const f = this.forward(_c); const ang = Math.acos(Math.min(1, Math.max(-1, f.dot(sasDir))));
+      const ax = _b.crossVectors(f, sasDir);
+      if (ax.lengthSq() < 1e-10) ax.set(1, 0, 0); else ax.normalize().applyQuaternion(_q2.copy(this.quat).invert());
+      const rate = Math.min(p.rate * 1.3, ang * 2.2);
+      cmd.x += ax.x * rate; cmd.y += ax.y * rate; cmd.z += ax.z * rate;
+      this.sasErr = ang;
+    } else this.sasErr = null;
+    this.torque.copy(cmd).sub(this.w);
+    if (this.fa || sasDir) this.w.lerp(cmd, 1 - Math.exp(-dt * 4));
     else this.w.addScaledVector(cmd, dt * 1.2);
     // the virtual stick slowly re-centres
     this.mouse.x *= Math.exp(-dt * 2.5); this.mouse.y *= Math.exp(-dt * 2.5);
@@ -56,7 +83,7 @@ export class Ship {
   }
 
   integrate(dt, accelWorld, gravity) {
-    if (this.docked) return;
+    if (this.docked || this.landed) return;
     // velocity-Verlet
     gravity(this.pos, _b);
     const ax = _b.x + accelWorld.x, ay = _b.y + accelWorld.y, az = _b.z + accelWorld.z;
@@ -95,10 +122,13 @@ export class FlightCamera {
     this.pos = V(0, 5, -26); this.first = true;
     this.orbit = new OrbitControls(camera, dom); this.orbit.enabled = false; this.orbit.enableDamping = true; this.orbit.enablePan = false;
     this.cine = { pos: V(), until: 0 };
-    this.shakeT = 0;
+    this.shakeT = 0; this.scale = 1; this.zoom = 1; this.kickAmt = 0;
+    dom.addEventListener('wheel', (e) => { if (this.mode === 0 || this.mode === 4) this.zoom = Math.min(4, Math.max(0.45, this.zoom * (e.deltaY > 0 ? 1.1 : 0.9))); }, { passive: true });
   }
   cycle() { this.setMode((this.mode + 1) % CAM_MODES.length); }
-  setMode(m) { this.mode = m; this.first = true; this.orbit.enabled = m === 2; if (m === 2) { this.cam.position.set(18, 8, -30); this.orbit.target.set(0, 0, 0); } }
+  /** impulse shake (collisions, hard docks) */
+  kick(a) { this.kickAmt = Math.min(3, this.kickAmt + a); }
+  setMode(m) { this.mode = m; this.first = true; this.orbit.enabled = m === 2; if (m === 2) { this.cam.position.set(18, 8, -30).multiplyScalar(this.scale); this.orbit.target.set(0, 0, 0); } }
   get name() { return CAM_MODES[this.mode]; }
 
   update(ship, dt, t, shipObj, { targetRel = null } = {}) {
@@ -107,13 +137,13 @@ export class FlightCamera {
     cam.fov += ((ship.boosting ? fovBase + 8 : fovBase) - cam.fov) * (1 - Math.exp(-dt * 3));
     const q = ship.quat;
     if (this.mode === 0) {
-      const want = V(0, 6.5, -30).applyQuaternion(q);
+      const want = V(0, 6.5, -30).multiplyScalar(this.scale * this.zoom).applyQuaternion(q);
       // the camera lags a little behind accelerations — sells mass and speed
       if (this.first) { this.pos.copy(want); this.first = false; }
       this.pos.lerp(want, 1 - Math.exp(-dt * 5));
       cam.position.copy(this.pos);
       cam.up.set(0, 1, 0).applyQuaternion(q);
-      cam.lookAt(V(0, 0.5, 26).applyQuaternion(q));
+      cam.lookAt(V(0, 0.5, 26).multiplyScalar(this.scale).applyQuaternion(q));
     } else if (this.mode === 1) {
       cam.position.copy(shipObj.userData.cockpit).applyQuaternion(q);
       cam.quaternion.copy(q).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.PI));
@@ -124,7 +154,8 @@ export class FlightCamera {
       // over-the-shoulder: ship in the foreground, the selected target framed behind it
       const d = targetRel.clone(); const dist = d.length(); d.normalize();
       const up = ship.up();
-      const want = d.clone().multiplyScalar(-28).addScaledVector(up, 7).add(V().crossVectors(d, up).normalize().multiplyScalar(6));
+      const zs = this.scale * this.zoom;
+      const want = d.clone().multiplyScalar(-28 * zs).addScaledVector(up, 7 * zs).add(V().crossVectors(d, up).normalize().multiplyScalar(6 * zs));
       if (this.first) { this.pos.copy(want); this.first = false; }
       this.pos.lerp(want, 1 - Math.exp(-dt * 3));
       cam.position.copy(this.pos); cam.up.copy(up);
@@ -135,7 +166,7 @@ export class FlightCamera {
       const vdir = ship.vel.lengthSq() > 1e-12 ? ship.forward() : ship.forward();
       if (t > this.cine.until || rel.length() > 400) {
         const side = V(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-        rel.copy(vdir).multiplyScalar(60 + Math.random() * 80).addScaledVector(side, 14 + Math.random() * 20);
+        rel.copy(vdir).multiplyScalar((60 + Math.random() * 80) * this.scale).addScaledVector(side, (14 + Math.random() * 20) * this.scale);
         this.cine.until = t + 5 + Math.random() * 3;
         this.cine.fov = 22 + Math.random() * 20;
       }
@@ -147,7 +178,8 @@ export class FlightCamera {
       cam.fov = this.cine.fov;
     }
     // shake from engines
-    const sh = settings.shake * (ship.boosting ? 0.12 : ship.main > 0.2 ? 0.03 : 0);
+    this.kickAmt *= Math.exp(-dt * 3.5);
+    const sh = settings.shake * ((ship.boosting ? 0.12 : ship.main > 0.2 ? 0.03 : 0) + this.kickAmt + (ship.heat || 0) * 0.25);
     if (sh > 0 && this.mode !== 2) { this.shakeT += dt; cam.position.add(V(Math.sin(this.shakeT * 53), Math.sin(this.shakeT * 41 + 1), Math.sin(this.shakeT * 37 + 2)).multiplyScalar(sh)); }
     cam.updateProjectionMatrix();
   }

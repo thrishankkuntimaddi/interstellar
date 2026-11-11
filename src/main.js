@@ -12,6 +12,7 @@ import { fetchEphemeris, fmt } from './data/astro.js';
 import { setBlackHoleMode, BH_MODES, INSTANCES_UNIFORMS } from './world/blackhole.js';
 import { Menu } from './ui/menu.js';
 import { Explore } from './game/explore.js';
+import { award, stat, selectShip } from './game/career.js';
 
 import c01 from './chapters/c01_cosmos.js';
 import c02 from './chapters/c02_launch.js';
@@ -63,6 +64,7 @@ function applySettings(s, key) {
   audio.el.volume = s.volume;
   setBlackHoleMode(s.bhLook);
   hud.show(s.hud && (state === 'journey' || state === 'explore'));
+  if (explore) { explore.dom.f.classList.toggle('nohud', !s.hud); explore.dom.f.classList.toggle('nokeys', !s.keyHints); }
   $('log').style.display = s.subtitles ? '' : 'none';
   for (const u of INSTANCES_UNIFORMS()) u.uSteps.value = s.bhQuality;
   if (key === 'shadows') {
@@ -104,7 +106,7 @@ async function boot() {
   explore = new Explore(ctx);
   ctx.menu = new Menu({
     onJourney: () => startJourney(0),
-    onExplore: (id) => startExplore(id),
+    onExplore: (id, mission) => startExplore(id, mission),
     onResume: () => resume(),
     onMainMenu: () => toMainMenu(),
   });
@@ -112,7 +114,8 @@ async function boot() {
   state = 'menu';
   $('loader').style.opacity = 0; setTimeout(() => $('loader').remove(), 2100);
   const t0 = parseFloat(params.get('t') || '-1');
-  if (params.get('explore')) startExplore(params.get('explore'));
+  if (params.get('ship')) selectShip(params.get('ship'));
+  if (params.get('explore')) startExplore(params.get('explore'), params.get('mission'));
   else if (t0 >= 0) startJourney(t0);
   else ctx.menu.show('main');
   requestAnimationFrame(frame);
@@ -135,13 +138,13 @@ async function startJourney(t0 = 0) {
   audio.seek(t0);
   try { await audio.start(); } catch (e) { console.warn(e); }
 }
-async function startExplore(id) {
+async function startExplore(id, mission = null) {
   ctx.menu.hide(); ctx.menu.inGame = true;
   audio.el.pause();
   state = 'explore';
   hud.show(settings.hud);
   hud.updateLogs([], 0, ''); hud.updateCard([], 0); hud.setInteract(null); hud.letterbox(0);
-  await explore.start(id);
+  await explore.start(id, mission);
 }
 function pause() {
   if (state === 'journey') audio.el.pause();
@@ -179,6 +182,19 @@ function setSunFlare(sunDir, enabled) {
   u.uFlare.value = ahead ? 1 : 0;
 }
 
+/** Save the frame that was just rendered (must run in the same task as the render). */
+function savePhoto() {
+  try {
+    $('gl').toBlob((blob) => {
+      if (!blob) return;
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+      a.download = `interstellar-${explore.locId}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`;
+      a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      stat('photos'); award('photo'); explore.toast('PHOTOGRAPH SAVED', a.download, '#9fc4ff', 2500);
+    }, 'image/png');
+  } catch (e) { console.warn(e); }
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -190,12 +206,13 @@ function frame(now) {
     if (!ctx.menu.visible) explore.update(dt);
     const L = explore.loc;
     Object.assign(u, {});
-    u.uFade.value = 0; u.uFlash.value = 0; u.uHeat.value = 0; u.uDistort.value = 0; u.uCold.value = 0;
+    u.uFade.value = explore.fade; u.uFlash.value = 0; u.uHeat.value = explore.heat * 0.75; u.uDistort.value = explore.heat * 0.15; u.uCold.value = 0;
     u.uWhite.value = Math.max(0, u.uWhite.value - dt * 0.6);
     u.uGrain.value = 0.05 * settings.grain; u.uAberration.value = 0.0012; u.uVignette.value = 0.85;
     engine.bloom.strength = 0.75; engine.renderer.toneMappingExposure = 1.0;
     if (L) setSunFlare(L.sunDir, L.units !== 'rs');
     engine.render(now / 1000);
+    if (explore.wantShot) { explore.wantShot = false; savePhoto(); }
     engine.adaptQuality(dt, settings.resolution, settings.adaptive);
     return;
   }
@@ -237,16 +254,18 @@ function frame(now) {
 
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
-  if (k === 'tab' || k === ' ') e.preventDefault();
+  if (k === 'tab' || k === ' ' || (state === 'explore' && (k === 'backspace' || k === "'" || k === '/'))) e.preventDefault();
   input.keys.add(k);
   if (state === 'loading') return;
   if (k === 'escape') {
+    if (state === 'explore' && !ctx.menu.visible && explore.overlayOpen()) { explore.closeOverlays(); return; }
     if (ctx.menu.visible) { if (ctx.menu.inGame && (ctx.menu.screen === 'pause')) resume(); else if (ctx.menu.screen !== 'main' && ctx.menu.screen !== 'pause') ctx.menu.render(ctx.menu.inGame ? 'pause' : 'main'); }
     else if (state === 'journey' || state === 'explore') pause();
     return;
   }
   if (ctx.menu.visible) return;
   if (k === 'h') { setSetting('hud', !settings.hud); return; }
+  if (state === 'explore' && k !== 'g') { explore.handleKey(k); return; }
   if (k === 'f' && state !== 'explore') { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); return; }
   if (k === 'm') { audio.mute(); return; }
   if (k === 'g') { const next = settings.bhLook === 'movie' ? 'physical' : 'movie'; setSetting('bhLook', next); hud.flashNote(BH_MODES[next].label); return; }
