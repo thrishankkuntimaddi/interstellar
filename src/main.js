@@ -162,6 +162,8 @@ function toMainMenu() {
   hud.show(false); hud.letterbox(0); hud.setInteract(null);
   ctx.menu.show('main');
 }
+// 14:56 — the film ends at the horizon. The game does not: you keep falling, into the tesseract.
+audio.el.addEventListener('ended', () => { if (state === 'journey') { engine.fx.uWhite.value = 1; startExplore('tesseract', 'data'); } });
 document.addEventListener('pointerlockchange', () => {
   if (state === 'explore' && !document.pointerLockElement && !ctx.menu.visible && explore.cam.mode !== 2 && explore._wantPauseOnUnlock) pause();
   if (document.pointerLockElement) explore._wantPauseOnUnlock = true;

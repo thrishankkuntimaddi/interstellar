@@ -5,6 +5,9 @@ import { SHIPS, shipDef } from '../world/fleet.js';
 import { fmt } from '../data/astro.js';
 
 const CONTROLS = [
+  ['TARS · COPILOT', [['Enter', 'Autopilot: TARS flies the current objective (or docks / lands / approaches the selected target). Enter again, or any flight key, takes it back'], ['Y', 'Ask TARS what to do next'], ['I', 'Spoken status report'], ['O', 'Voice commands on / off (Chrome, needs the microphone)'],
+    ['Say…', '“autopilot” · “dock” · “land” · “approach” · “brake” · “prograde” · “full throttle” · “throttle fifty” · “cut engines” · “target Hubble” · “scan” · “status” · “launch” · “stage” · “I have control”'],
+    ['Space', 'Launch: ignition, staging, Ranger separation · Tesseract: key a gravity pulse']]],
   ['FLIGHT', [['Mouse', 'Pitch & yaw (click to capture the mouse)'], ['W / S', 'Main engines / retro thrust'], ['Shift', 'Boost (with W)'], ['A / D', 'Lateral RCS'], ['R / F', 'Vertical RCS'], ['Q / E', 'Roll'],
     ['[ / ]', 'Throttle hold −/+ 10 %'], ['Z · Backspace', 'Full throttle hold · cut'], ['X', 'Match velocity with the target'], ['V', 'Flight assist on/off'], ['U', 'Undock'], ['P', 'Restart from the starting orbit']]],
   ['AUTOPILOT & NAVIGATION', [['1 / 2', 'Hold orbital prograde / retrograde'], ['3 / 4', 'Hold toward / away from the target'], ['5', 'Hold radial out (away from the planet)'], ['6', 'Brake: hold retrograde relative to the target'], ['0', 'Autopilot off'],
@@ -48,11 +51,12 @@ export class Menu {
       const item = (title, sub, fn) => { const b = el('button', 'menu-item', `<div class="mi-t">${title}</div><div class="mi-s">${sub}</div>`); b.onclick = fn; list.appendChild(b); };
       if (screen === 'pause') item('RESUME', 'back to where you were', () => this.cb.onResume());
       const done = Object.keys(career.missions).length, total = Object.values(MISSIONS).reduce((a, m) => a + m.length, 0);
-      item('FLIGHT OPERATIONS', `six worlds · ${done} / ${total} contracts flown · real orbital mechanics`, () => this.render('locations'));
+      item('LAUNCH FROM EARTH', 'Saturn V · LC-39A to orbit · fly it yourself or let TARS fly while you watch', () => this.cb.onExplore('launch', 'orbit'));
+      item('FLIGHT OPERATIONS', `eight worlds · ${done} / ${total} contracts flown · TARS can fly any of them (Enter)`, () => this.render('locations'));
       item('HANGAR', `${shipDef(career.ship).name} selected · ${SHIPS.filter((s) => unlocked(s.rank)).length} of ${SHIPS.length} spacecraft available`, () => this.render('hangar'));
       item('PILOT RECORD', `${Object.keys(career.ach).length} / ${Object.keys(ACHIEVEMENTS).length} achievements · ${Object.keys(career.codex).length} / ${Object.keys(CODEX).length} codex entries`, () => this.render('pilot'));
-      item('THE JOURNEY', 'Earth → Saturn → Gargantua · the 14 min 56 s film, scored to your soundtrack', () => this.cb.onJourney());
-      item('SETTINGS', 'graphics · camera · flight · gameplay · audio', () => this.render('settings'));
+      item('THE JOURNEY', 'Earth → Saturn → Gargantua · the 14 min 56 s film · when it ends, you fall into the tesseract and play on', () => this.cb.onJourney());
+      item('SETTINGS', 'graphics · camera · flight · pilot aids · TARS voice · audio', () => this.render('settings'));
       item('CONTROLS', 'keyboard, mouse & gamepad', () => this.render('controls'));
       if (screen === 'pause') item('MAIN MENU', 'leave this flight', () => this.cb.onMainMenu());
       panel.appendChild(list);
@@ -66,7 +70,7 @@ export class Menu {
         const open = locationUnlocked(L), ms = MISSIONS[L.id] || [];
         const got = ms.reduce((a, m) => a + (career.missions[missionKey(L.id, m.id)]?.stars || 0), 0);
         const c = el('button', `loc-card loc-${L.id} ${open ? '' : 'locked'}`, `<div class="loc-tag">${L.tag}</div><div class="loc-name">${L.name}</div><div class="loc-sub">${L.sub}</div><div class="loc-desc">${L.desc}</div>
-          <div class="loc-foot">${open ? `<span class="stars">★</span> ${got} / ${ms.length * 3}` : `LOCKED · reach ${RANKS[L.rank].name}${L.id === 'gargantua' ? ' or fly through the wormhole' : ''}`}</div>`);
+          <div class="loc-foot">${open ? `<span class="stars">★</span> ${got} / ${ms.length * 3}` : L.lock ? `LOCKED · ${L.lock}` : `LOCKED · reach ${RANKS[L.rank].name}${L.id === 'gargantua' ? ' or fly through the wormhole' : ''}`}</div>`);
         if (open) c.onclick = () => this.render('missions', L.id); else c.disabled = true;
         grid.appendChild(c);
       }

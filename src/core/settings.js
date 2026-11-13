@@ -13,6 +13,7 @@ const DEFAULTS = {
   fov: 50, mouseSens: 1.0, invertY: false, volume: 0.9, sfx: 0.7,
   hud: true, letterbox: true, shake: 1.0, subtitles: true, bhLook: 'movie', flightAssist: true,
   dust: true, gamepad: true, keyHints: true, infiniteFuel: false, invulnerable: false, sandbox: false,
+  easy: true, voice: true, voiceVol: 0.9,
 };
 
 function load() {
@@ -58,10 +59,13 @@ export const SCHEMA = [
   { key: 'dust', label: 'Space dust (motion streaks)', type: 'toggle' },
   { key: 'keyHints', label: 'Key hints on the flight HUD', type: 'toggle' },
   { group: 'GAMEPLAY' },
+  { key: 'easy', label: 'Pilot aids: wider docking & landing limits, half damage, longer par times', type: 'toggle' },
   { key: 'infiniteFuel', label: 'Unlimited propellant', type: 'toggle' },
   { key: 'invulnerable', label: 'Indestructible hull', type: 'toggle' },
   { key: 'sandbox', label: 'Sandbox: unlock every ship and world', type: 'toggle' },
   { group: 'AUDIO' },
   { key: 'volume', label: 'Music', type: 'range', min: 0, max: 1, step: 0.01 },
   { key: 'sfx', label: 'Engine & effects', type: 'range', min: 0, max: 1, step: 0.01 },
+  { key: 'voice', label: 'TARS speaks (callouts, warnings, guidance)', type: 'toggle' },
+  { key: 'voiceVol', label: 'TARS voice volume', type: 'range', min: 0, max: 1, step: 0.01 },
 ];

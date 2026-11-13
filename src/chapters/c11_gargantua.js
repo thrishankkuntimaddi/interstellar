@@ -29,7 +29,7 @@ function rangerRs(lt) {
   return dir.normalize().multiplyScalar(r);
 }
 
-function tesseract() {
+export function tesseract() {
   const N = 14, S = 9, lines = [];
   for (let a = 0; a < 3; a++) for (let i = -N; i <= N; i += 2) for (let j = -N; j <= N; j += 2) lines.push([a, i * S / 2, j * S / 2]);
   const geo = new THREE.BoxGeometry(1, 1, 1);

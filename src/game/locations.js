@@ -12,6 +12,8 @@ import { PLANETS, fmt, C } from '../data/astro.js';
 import { Body } from './flight.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { NOISE } from '../gl/noise.js';
+import { buildLaunch } from './launch.js';
+import { buildTesseract } from './tesseract.js';
 
 const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 
@@ -196,7 +198,7 @@ export function buildJupiter(ctx, def) {
       return {
         update(s, dt) { o.mesh.rotateY(dt * 0.209); }, // Juno spins at 2 rpm
         telemetry(s) { const f = flux(s); return [['RADIATION FLUX', `× ${fmt.n(f, 2)}`, f > 2.2 ? 'warn' : '']]; },
-        hazard(s) { const f = flux(s); return f > 2.2 ? { dmg: (f - 2.2) * 0.9, label: 'RADIATION' } : null; },
+        hazard(s) { const f = flux(s); return f > 2.2 ? { dmg: (f - 2.2) * 0.07, label: 'RADIATION' } : null; }, // a full Keplerian pass through the belts costs about half a hull
       };
     },
   });
@@ -313,8 +315,15 @@ export function buildSaturn(ctx, def) {
     afterCamera(cam) { bg.sync(cam); sky.camera = bg.camera; },
     collide(ship) {
       if (ship.pos.length() < RS + 300e3) return 'Lost in Saturn’s atmosphere.';
+      this.threat = null;
       if (chunks.visible) {
-        for (let i = 0; i < N; i++) { const s = seeds[i]; if (s.s < 3) continue; chunks.getMatrixAt(i, m4); pp.setFromMatrixPosition(m4); if (pp.length() < s.s * 1.1 + 4) return `Collided with a ${fmt.n(s.s, 0)} m ring boulder.`; }
+        let best = 1e9;
+        for (let i = 0; i < N; i++) {
+          const s = seeds[i]; if (s.s < 3) continue; chunks.getMatrixAt(i, m4); pp.setFromMatrixPosition(m4);
+          const gap = pp.length() - (s.s * 1.1 + 4);
+          if (gap < 0) return `Collided with a ${fmt.n(s.s, 0)} m ring boulder.`;
+          if (gap < best) { best = gap; (this.threat ||= { rel: V(), gap: 0 }).rel.copy(pp); this.threat.gap = gap; } // nearest boulder, for the copilot
+        }
       }
       return null;
     },
@@ -360,9 +369,9 @@ export function buildGargantua(ctx, def) {
   const ranger = def.build(); fg.add(ranger);
   const objs = [
     { id: 'gargantua', name: 'GARGANTUA', pos: V(0, 0, 0), radius: 1, scan: 40 },
-    { id: 'miller', name: 'MILLER', pos: SYS.miller.clone(), radius: 0.004, planet: 'miller', scan: 0.02 },
-    { id: 'mann', name: 'MANN', pos: SYS.mann.clone(), radius: 0.004, planet: 'mann', scan: 0.02 },
-    { id: 'edmunds', name: 'EDMUNDS', pos: SYS.edmunds.clone(), radius: 0.004, planet: 'edmunds', scan: 0.02 },
+    { id: 'miller', name: 'MILLER', pos: SYS.miller.clone(), radius: 0.004, planet: 'miller', scan: 0.06 },
+    { id: 'mann', name: 'MANN', pos: SYS.mann.clone(), radius: 0.004, planet: 'mann', scan: 0.06 },
+    { id: 'edmunds', name: 'EDMUNDS', pos: SYS.edmunds.clone(), radius: 0.004, planet: 'edmunds', scan: 0.06 },
     { id: 'wormhole', name: 'WORMHOLE', pos: SYS.wormhole.clone(), radius: 0.3, portal: 'saturn', scan: 6 },
   ];
   const clock = { proper: 0, earth: 0, minR: 1e9 };
@@ -422,4 +431,4 @@ export function buildGargantua(ctx, def) {
   return loc;
 }
 
-export const LOCATIONS = { earth: buildEarth, moon: buildMoon, mars: buildMars, jupiter: buildJupiter, saturn: buildSaturn, gargantua: buildGargantua };
+export const LOCATIONS = { launch: buildLaunch, tesseract: buildTesseract, earth: buildEarth, moon: buildMoon, mars: buildMars, jupiter: buildJupiter, saturn: buildSaturn, gargantua: buildGargantua };

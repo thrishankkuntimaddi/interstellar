@@ -7,7 +7,7 @@ import { buildLauncher, model } from '../world/models.js';
 import { createPlume } from '../world/fx.js';
 
 /** Real Saturn V (NASA model) when available, with a Ranger in place of the Apollo CSM. */
-function launcherWithRanger(ranger) {
+export function launcherWithRanger(ranger) {
   const rocket = buildLauncher(createPlume) || createRocket();
   const u = rocket.userData;
   const payloadY = u.payloadY ?? 86;
@@ -36,7 +36,7 @@ function simTime(lt) {
   return 57.2 + (lt - 28) * 15;
 }
 
-function skyDome(sunDir) {
+export function skyDome(sunDir) {
   const u = { uSun: { value: sunDir }, uAlt: { value: 0 } };
   const m = new THREE.Mesh(new THREE.SphereGeometry(60000, 48, 24), new THREE.ShaderMaterial({
     uniforms: u,
@@ -64,7 +64,7 @@ function skyDome(sunDir) {
   return m;
 }
 
-function groundPlane(sunDir) {
+export function groundPlane(sunDir) {
   const u = { uSun: { value: sunDir }, uFog: { value: new THREE.Color(0.72, 0.8, 0.9) }, uScorch: { value: 0 } };
   const m = new THREE.Mesh(new THREE.PlaneGeometry(120000, 120000, 1, 1), new THREE.ShaderMaterial({
     uniforms: u,
@@ -125,7 +125,7 @@ export function cloudLayer(y, sunDir, coverage = 0.45, scale = 0.00025) {
   return m;
 }
 
-function launchTower() {
+export function launchTower() {
   const g = new THREE.Group();
   const mat = new THREE.MeshStandardMaterial({ color: 0x8a2f1d, roughness: 0.8, metalness: 0.3 });
   const H = 118, W = 10;

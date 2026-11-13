@@ -26,15 +26,25 @@ export class Ship {
     this.mouse = { x: 0, y: 0 }; this.stick = { x: 0, y: 0 };
     this.fuel = 1; this.dvBudget = dvBudget; this.dvSpent = 0;
     this.hull = def.hull; this.throttle = 0; this.sas = 0; this.lights = false;
+    this.ap = null; this.apPower = 0; this.held = false;
   }
   forward(out = V()) { return out.set(0, 0, 1).applyQuaternion(this.quat); }
   up(out = V()) { return out.set(0, 1, 0).applyQuaternion(this.quat); }
   get dv() { return this.fuel * this.dvBudget; }
-  damage(n) { if (!settings.invulnerable) this.hull = Math.max(0, this.hull - n); }
+  damage(n) { if (!settings.invulnerable) this.hull = Math.max(0, this.hull - n * (settings.easy ? 0.5 : 1)); }
   refill() { this.fuel = 1; this.hull = this.def.hull; }
 
-  /** input.down(key); matchVel: relative velocity to null with X (or null); sasDir: world direction to hold (or null) */
+  /**
+   * input.down(key); matchVel: relative velocity to null with X (or null); sasDir: world direction to hold (or null).
+   * this.ap (set by the copilot): { acc: wanted world acceleration, boost, dir: forward to hold, quat: full attitude to hold }
+   */
   control(input, dt, matchVel, sasDir) {
+    const world = this.thrust(input, dt, matchVel);
+    this.steer(input, dt, sasDir);
+    return world;
+  }
+
+  thrust(input, dt, matchVel) {
     const k = (c) => input.down(c);
     const p = this.p;
     const dry = this.fuel <= 0 && !settings.infiniteFuel;
@@ -55,35 +65,60 @@ export class Ship {
       const mag = dv.length();
       if (mag > 1e-9) { world.add(dv.multiplyScalar(Math.min(p.accel, mag / dt) / mag)); r.add(_c.copy(dv).applyQuaternion(_q2.copy(this.quat).invert())); }
     }
+    const ap = this.ap;
+    if (ap && ap.acc && !dry) {
+      // the copilot flies with the same engines: any direction up to the main-engine acceleration (boost if it asks)
+      const max = p.accel * (ap.boost ? p.boost : 1), m = ap.acc.length();
+      if (m > 1e-12) {
+        _b.copy(ap.acc).multiplyScalar(Math.min(1, max / m)); world.add(_b);
+        _c.copy(_b).applyQuaternion(_q2.copy(this.quat).invert()); r.add(_c);
+        const along = Math.max(0, _c.z) / p.accel;
+        if (along > 0.03) this.main = Math.max(this.main, Math.min(1, along * 0.55 + 0.1));
+        if (ap.boost && along > 1.05) this.boosting = true;
+        this.apPower = Math.min(1, m / max);
+      } else this.apPower = 0;
+    }
     if (this.docked) world.set(0, 0, 0);
     this.rcsLevel = r.lengthSq() > 0 || k('q') || k('e') ? 1 : 0;
     this.gLoad = world.length();
     // propellant
     const spent = this.gLoad * dt;
     if (spent > 0 && !settings.infiniteFuel) { this.fuel = Math.max(0, this.fuel - spent / this.dvBudget); this.dvSpent += spent; }
-    // rotation: mouse / stick = rate command (virtual stick), keys = roll, SAS = attitude hold
+    return world;
+  }
+
+  /** rotation: mouse / stick = rate command (virtual stick), keys = roll, SAS / copilot = attitude hold */
+  steer(input, dt, sasDir) {
+    const k = (c) => input.down(c), p = this.p, ap = this.ap;
     const inv = settings.invertY ? -1 : 1;
     const sx = this.mouse.x + this.stick.x, sy = this.mouse.y + this.stick.y;
     const cmd = V(-sy * inv * p.rate, -sx * p.rate, ((k('e') ? 1 : 0) - (k('q') ? 1 : 0)) * p.rollRate);
     const manual = Math.hypot(sx, sy) > 0.06;
-    if (sasDir && !manual) {
-      const f = this.forward(_c); const ang = Math.acos(Math.min(1, Math.max(-1, f.dot(sasDir))));
-      const ax = _b.crossVectors(f, sasDir);
+    const dir = (ap && ap.dir) || sasDir, att = ap && ap.quat;
+    this.sasErr = null;
+    if (att && !manual) {
+      _q.copy(this.quat).invert().multiply(att);
+      if (_q.w < 0) _q.set(-_q.x, -_q.y, -_q.z, -_q.w);
+      const ang = 2 * Math.acos(Math.min(1, _q.w)), sn = Math.sqrt(Math.max(0, 1 - _q.w * _q.w));
+      if (sn > 1e-5) { const rate = Math.min(p.rate * 1.3, ang * 2.2) / sn; cmd.x += _q.x * rate; cmd.y += _q.y * rate; cmd.z += _q.z * rate; }
+      this.sasErr = ang;
+    } else if (dir && !manual) {
+      const f = this.forward(_c); const ang = Math.acos(Math.min(1, Math.max(-1, f.dot(dir))));
+      const ax = _b.crossVectors(f, dir);
       if (ax.lengthSq() < 1e-10) ax.set(1, 0, 0); else ax.normalize().applyQuaternion(_q2.copy(this.quat).invert());
       const rate = Math.min(p.rate * 1.3, ang * 2.2);
       cmd.x += ax.x * rate; cmd.y += ax.y * rate; cmd.z += ax.z * rate;
       this.sasErr = ang;
-    } else this.sasErr = null;
+    }
     this.torque.copy(cmd).sub(this.w);
-    if (this.fa || sasDir) this.w.lerp(cmd, 1 - Math.exp(-dt * 4));
+    if (this.fa || dir || att) this.w.lerp(cmd, 1 - Math.exp(-dt * 4));
     else this.w.addScaledVector(cmd, dt * 1.2);
     // the virtual stick slowly re-centres
     this.mouse.x *= Math.exp(-dt * 2.5); this.mouse.y *= Math.exp(-dt * 2.5);
-    return world;
   }
 
   integrate(dt, accelWorld, gravity) {
-    if (this.docked || this.landed) return;
+    if (this.docked || this.landed || this.held) return;
     // velocity-Verlet
     gravity(this.pos, _b);
     const ax = _b.x + accelWorld.x, ay = _b.y + accelWorld.y, az = _b.z + accelWorld.z;
@@ -122,6 +157,7 @@ export class FlightCamera {
     this.pos = V(0, 5, -26); this.first = true;
     this.orbit = new OrbitControls(camera, dom); this.orbit.enabled = false; this.orbit.enableDamping = true; this.orbit.enablePan = false;
     this.cine = { pos: V(), until: 0 };
+    this.chase = { offset: V(0, 6.5, -30), look: V(0, 0.5, 26), level: false };
     this.shakeT = 0; this.scale = 1; this.zoom = 1; this.kickAmt = 0;
     dom.addEventListener('wheel', (e) => { if (this.mode === 0 || this.mode === 4) this.zoom = Math.min(4, Math.max(0.45, this.zoom * (e.deltaY > 0 ? 1.1 : 0.9))); }, { passive: true });
   }
@@ -137,13 +173,25 @@ export class FlightCamera {
     cam.fov += ((ship.boosting ? fovBase + 8 : fovBase) - cam.fov) * (1 - Math.exp(-dt * 3));
     const q = ship.quat;
     if (this.mode === 0) {
-      const want = V(0, 6.5, -30).multiplyScalar(this.scale * this.zoom).applyQuaternion(q);
-      // the camera lags a little behind accelerations — sells mass and speed
-      if (this.first) { this.pos.copy(want); this.first = false; }
-      this.pos.lerp(want, 1 - Math.exp(-dt * 5));
-      cam.position.copy(this.pos);
-      cam.up.set(0, 1, 0).applyQuaternion(q);
-      cam.lookAt(V(0, 0.5, 26).multiplyScalar(this.scale).applyQuaternion(q));
+      const c = this.chase;
+      if (c.level) {
+        // tracking camera in the local-level frame (launch): the horizon stays level while the vehicle pitches over
+        const up = ship.pos.clone().normalize(), east = V(up.y, -up.x, 0).normalize(), south = V().crossVectors(east, up);
+        const o = c.offset, z = this.scale * this.zoom;
+        const want = V().addScaledVector(east, o.x * z).addScaledVector(up, o.y * z).addScaledVector(south, o.z * z);
+        if (this.first) { this.pos.copy(want); this.first = false; }
+        this.pos.lerp(want, 1 - Math.exp(-dt * 3));
+        cam.position.copy(this.pos); cam.up.copy(up);
+        cam.lookAt(ship.forward().multiplyScalar(c.look.z * this.scale));
+      } else {
+        const want = c.offset.clone().multiplyScalar(this.scale * this.zoom).applyQuaternion(q);
+        // the camera lags a little behind accelerations — sells mass and speed
+        if (this.first) { this.pos.copy(want); this.first = false; }
+        this.pos.lerp(want, 1 - Math.exp(-dt * 5));
+        cam.position.copy(this.pos);
+        cam.up.set(0, 1, 0).applyQuaternion(q);
+        cam.lookAt(c.look.clone().multiplyScalar(this.scale).applyQuaternion(q));
+      }
     } else if (this.mode === 1) {
       cam.position.copy(shipObj.userData.cockpit).applyQuaternion(q);
       cam.quaternion.copy(q).multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.PI));

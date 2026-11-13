@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Ship, FlightCamera, SAS_MODES } from './flight.js';
 import { LOCATIONS, C_GAME, orbitalElements } from './locations.js';
 import { EngineSound } from './sfx.js';
+import { Copilot } from './copilot.js';
 import { createRcsJets, createDust, createPlasma } from './gfx.js';
 import { career, onCareer, addXp, award, stat, mark, completeMission, unlocked, locationUnlocked, rankInfo } from './career.js';
 import { MISSIONS, CODEX, LOCATION_INFO, locInfo, missionKey, ALL_MISSION_KEYS } from './missions.js';
@@ -16,6 +17,7 @@ const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const WARPS = [1, 10, 100, 1000];
 const ORBIT_AU = { earth: 1, moon: 1, mars: 1.524, jupiter: 5.203, saturn: 9.537 };
+const TARS_HINT = '<b>[Enter]</b> TARS flies it · <b>[Y]</b> what do I do? · <b>[I]</b> status · <b>[O]</b> voice commands · <b>[Space]</b> ignite / stage / transmit';
 const KEY_HINT = '[W/S] engines · [Shift] boost · [A/D R/F] RCS · [Q/E] roll · [X] match velocity · [1–6] autopilot hold · [0] off · [Tab] target · [B] scan<br>[M] orbit map · [N] nav computer · [T , .] time warp · [ [ ] ] throttle · [Z] full · [Bksp] cut · [C] camera · [L] lights · [K] photo · [J] contracts · [P] restart · [Esc] menu';
 const _q = new THREE.Quaternion();
 
@@ -29,6 +31,7 @@ export class Explore {
     this.padKeys = new Set(); this.padPrev = [];
     this.input = { down: (k) => ctx.input.down(k) || this.padKeys.has(k) };
     this.buildDom();
+    this.cop = new Copilot(this);
     document.addEventListener('mousemove', (e) => {
       if (!this.active || document.pointerLockElement !== ctx.engine.canvas || !this.ship) return;
       const k = settings.mouseSens / 320;
@@ -46,14 +49,14 @@ export class Explore {
   buildDom() {
     const f = document.createElement('div'); f.id = 'flight'; f.className = 'hidden';
     f.innerHTML = `<div class="cross"></div><div id="stick" class="fmark pro" style="left:50%;top:50%"><div class="box" style="width:6px;height:6px;border-radius:50%"></div></div><div id="marks"></div>
-      <div id="fl-warn"></div>
+      <div id="fl-warn"></div><div id="fl-ap"></div><div id="fl-tars"></div><div id="fl-mic">● MIC</div>
       <div id="fl-status">
         <div class="fl-bar"><span>Δv</span><div class="bar"><i id="fl-fuel"></i></div><b id="fl-fuel-t"></b></div>
         <div class="fl-bar"><span>HULL</span><div class="bar"><i id="fl-hull"></i></div><b id="fl-hull-t"></b></div>
         <div class="fl-bar"><span>THR</span><div class="bar"><i id="fl-thr"></i></div><b id="fl-thr-t"></b></div>
         <div id="fl-modes"></div>
       </div>
-      <div id="fl-keys">${KEY_HINT}</div>
+      <div id="fl-keys">${KEY_HINT}</div><div id="fl-help">${TARS_HINT}</div>
       <div id="fl-feed"></div>
       <canvas id="fl-map" width="760" height="760" class="hidden"></canvas>
       <div id="fl-nav" class="hidden"></div>
@@ -63,7 +66,7 @@ export class Explore {
     const toast = document.createElement('div'); toast.id = 'toast'; document.body.appendChild(toast);
     const q = (s) => f.querySelector(s);
     this.dom = { f, marks: q('#marks'), stick: q('#stick'), ob, toast, warn: q('#fl-warn'), fuel: q('#fl-fuel'), fuelT: q('#fl-fuel-t'), hull: q('#fl-hull'), hullT: q('#fl-hull-t'),
-      thr: q('#fl-thr'), thrT: q('#fl-thr-t'), modes: q('#fl-modes'), feed: q('#fl-feed'), map: q('#fl-map'), nav: q('#fl-nav'), result: q('#fl-result') };
+      thr: q('#fl-thr'), thrT: q('#fl-thr-t'), modes: q('#fl-modes'), ap: q('#fl-ap'), tars: q('#fl-tars'), mic: q('#fl-mic'), feed: q('#fl-feed'), map: q('#fl-map'), nav: q('#fl-nav'), result: q('#fl-result') };
     this.dom.mapCtx = this.dom.map.getContext('2d');
     this.markEls = new Map();
     this.mapOpen = false; this.navOpen = false;
@@ -81,6 +84,15 @@ export class Explore {
     while (this.dom.feed.children.length > 5) this.dom.feed.firstChild.remove();
   }
 
+  /** subtitle for everything TARS says */
+  tarsLine(text) {
+    const t = this.dom.tars; t.innerHTML = `<span>TARS</span>${text}`; t.classList.add('show');
+    clearTimeout(this._tl); this._tl = setTimeout(() => t.classList.remove('show'), Math.min(9000, 2200 + text.length * 55));
+  }
+  say(text, pri = 2) { this.cop.say(text, pri); }
+  micState(on, err) { this.dom.mic.classList.toggle('on', !!on); if (err) this.toast('VOICE COMMANDS OFF', err, '#ff7a4d', 3500); }
+  warps() { return this.loc?.warps || WARPS; }
+
   /** keep: { fuel, hull } carried from the previous location (wormhole transit) */
   async start(id, missionId = null, keep = null) {
     const { engine, hud, audio } = this.ctx;
@@ -90,9 +102,12 @@ export class Explore {
     await new Promise((r) => setTimeout(r, 30));
     let def = shipDef(career.ship); if (!unlocked(def.rank)) def = SHIPS[0];
     const loc = LOCATIONS[id](this.ctx, def);
+    if (loc.def) def = loc.def; // the pad gives you a launcher, the tesseract a suit
     this.loc = loc; this.locId = id; this.def = def;
-    this.flags = {}; loc.flags = this.flags;
-    const s = (this.ship = new Ship(def, loc.shipParams, loc.units === 'rs' ? (2.4 * def.dv) / 12000 : def.dv));
+    this.flags = loc.flags || {}; loc.flags = this.flags;
+    const s = (this.ship = loc.makeShip ? loc.makeShip() : new Ship(def, loc.shipParams, loc.units === 'rs' ? (2.4 * def.dv) / 12000 : def.dv));
+    this.cam.chase = loc.chase || { offset: V(0, 6.5, -30), look: V(0, 0.5, 26), level: false };
+    this.dockInfo = null;
     s.pos.copy(loc.ship.pos); s.vel.copy(loc.ship.vel); s.quat.copy(loc.ship.quat);
     if (keep) { s.fuel = keep.fuel; s.hull = Math.min(def.hull, keep.hull); }
     this.start0 = { pos: loc.ship.pos.clone(), vel: loc.ship.vel.clone(), quat: loc.ship.quat.clone() };
@@ -100,6 +115,9 @@ export class Explore {
     this.jets = createRcsJets(loc.ranger.userData.rcs || [], def.size); loc.ranger.add(this.jets);
     this.dust = createDust(); this.plasma = createPlasma(def.radius); this.boom = createExplosion({ scale: def.radius * 0.9, debris: 90 });
     loc.fg.add(this.dust, this.plasma, this.boom);
+    // the exhaust lights the hull and anything close behind it
+    this.glow = new THREE.PointLight(0xa8c8ff, 0, 90 * def.size, 1.6); this.glow.position.set(0, 0, -def.radius * 1.5);
+    if (!loc.launch) loc.ranger.add(this.glow);
     this.t = 0; this.warpI = 0; this.tgtI = 0; this.crash = null; this.scans = new Set(); this.respawns = 0; this.heatPeak = 0; this.lastMission = null; this.boomT = null;
     this.setMission(missionId, false);
     this.cam.scale = def.size; this.cam.zoom = 1; this.cam.setMode(0);
@@ -117,7 +135,17 @@ export class Explore {
     award('firstFlight');
     if (LOCATION_INFO.every((l) => career.visited[l.id])) award('tourist');
     if (SHIPS.every((x) => career.flown[x.id])) award('fleet');
-    this.toast(loc.name.toUpperCase(), `${def.name} · click to fly with the mouse · Esc for menu`);
+    this.toast(loc.name.toUpperCase(), `${def.name} · click to fly with the mouse · Enter: TARS flies it · Esc for menu`, '', 5000);
+    this.greet();
+  }
+
+  greet() {
+    const L = this.loc, m = this.mission;
+    const line = L.launch ? 'Launch vehicle is fuelled and go. Press space for ignition, or press Enter and I will fly the ascent.'
+      : L.tesseract ? 'We are inside. This is the bulk. Five fragments of quantum data are marked. Collect them, then find the moment.'
+      : m ? `Contract: ${m.name}. ${m.brief.split('. ')[0]}. Press Enter if you want me to fly it.`
+      : `${L.name}. Free roam. Press Enter and I will take us to the selected target.`;
+    setTimeout(() => { if (this.active && this.loc === L) this.cop.say(line, 2); }, 1200);
   }
 
   setMission(missionId, announce = true) {
@@ -137,7 +165,9 @@ export class Explore {
       for (const L of this.loc.layers) L.scene.traverse((o) => { o.geometry?.dispose?.(); });
       this.loc = null;
     }
+    this.cop?.disengage(null);
     if (full) {
+      this.cop?.voice.stop(); this.cop?.mic.stop(); this.dom.tars.classList.remove('show');
       this.dom.f.classList.add('hidden');
       this.ctx.hud.el.classList.remove('explore');
       this.dom.ob.innerHTML = '';
@@ -182,11 +212,20 @@ export class Explore {
       return true;
     }
     if (k === 'escape' && this.mapOpen) { this.closeOverlays(); return true; }
+    const cop = this.cop;
+    if (k === 'enter') { if (cop.on) cop.disengage(); else cop.engage('auto'); return true; }
+    if (k === 'o') { cop.toggleMic(); return true; }
+    if (k === 'y') { cop.hint(); return true; }
+    if (k === 'i') { cop.report(); return true; }
+    if (k === ' ') { if (!this.crash) L.key?.(' ', this); return true; }
+    if (cop.on && ['w', 's', 'a', 'd', 'r', 'f', 'x', 'z', '[', ']', 'backspace'].includes(k)) cop.disengage('You have control.');
+    if (cop.on && k >= '0' && k <= '6') cop.disengage(null);
     if (k === 'tab') { this.tgtI = (this.tgtI + 1) % this.targets().length; this.sfx?.ping(520, 0.06, 0.08); return true; }
     if (k === 'c') { this.cam.cycle(); if (this.cam.mode === 2) { this.ctx.engine.camera.position.applyQuaternion(s.quat); if (document.pointerLockElement) document.exitPointerLock(); } return true; }
     if (k === 'v') { s.fa = !s.fa; this.toast(`FLIGHT ASSIST ${s.fa ? 'ON' : 'OFF'}`, s.fa ? 'rotation damped' : 'pure Newtonian rotation', '', 1500); return true; }
-    if (k === 't' || k === '.') { this.warpI = k === 't' ? (this.warpI + 1) % WARPS.length : Math.min(WARPS.length - 1, this.warpI + 1); this.toast(`TIME WARP ×${WARPS[this.warpI]}`, 'applies while coasting', '', 1200); return true; }
-    if (k === ',') { this.warpI = Math.max(0, this.warpI - 1); this.toast(`TIME WARP ×${WARPS[this.warpI]}`, '', '', 1200); return true; }
+    const W = this.warps();
+    if (k === 't' || k === '.') { this.warpI = k === 't' ? (this.warpI + 1) % W.length : Math.min(W.length - 1, this.warpI + 1); this.toast(`TIME WARP ×${W[this.warpI]}`, L.warpAlways ? 'the whole ascent runs faster' : 'applies while coasting', '', 1200); return true; }
+    if (k === ',') { this.warpI = Math.max(0, this.warpI - 1); this.toast(`TIME WARP ×${W[this.warpI]}`, '', '', 1200); return true; }
     if (k === 'u' && s.docked) { const ax = s.def.dockAxis.clone().applyQuaternion(s.quat); s.docked = null; s.vel.addScaledVector(ax, -0.3); this.toast('UNDOCKED', '', '', 1500); this.sfx?.thud(0.3); return true; }
     if (k === 'p') { this.respawn(true); return true; }
     if (k >= '0' && k <= '6') { s.sas = +k; this.sfx?.ping(700, 0.05, 0.08); this.toast(`AUTOPILOT · ${SAS_MODES[s.sas]}`, s.sas ? 'holds attitude · moving the stick overrides' : '', '', 1300); return true; }
@@ -212,7 +251,8 @@ export class Explore {
   respawn(countIt = false) {
     const s = this.ship;
     s.pos.copy(this.start0.pos); s.vel.copy(this.start0.vel); s.quat.copy(this.start0.quat); s.w.set(0, 0, 0); s.docked = null; s.landed = null;
-    s.refill(); s.throttle = 0; s.sas = 0; s.heat = 0;
+    this.cop.disengage(null); this.loc.reset?.();
+    s.refill(); s.throttle = 0; s.sas = 0; s.heat = 0; this.warpI = 0;
     this.loc.ranger.visible = true; this.boomT = null; this.boom.userData.update(-1);
     if (this.loc.clock) { this.loc.clock.minR = 1e9; }
     if (countIt) {
@@ -221,8 +261,23 @@ export class Explore {
     }
   }
 
+  /** a scripted hand-over (wormhole-style): controls freeze, the screen can whiten, then `then()` runs */
+  transit({ title, sub = '', color = '#9fc4ff', t = 4, white = false, then }) {
+    if (this.crash) return;
+    this.cop.disengage(null);
+    this.crash = { t, T: t, then, white };
+    this.toast(title, sub, color, t * 1000);
+    this.ship.throttle = 0; this.ship.sas = 0;
+  }
+  liftoff() {
+    const s = this.ship; if (!s.landed) return;
+    const o = s.landed.obj, n = s.pos.clone().sub(o.body.pos).normalize();
+    s.landed = null; s.vel.copy(o.body.vel).addScaledVector(n, 1.2); s.pos.addScaledVector(n, 0.4); this.toast('LIFTOFF', '', '', 1200);
+  }
+
   fail(msg, { title = 'SPACECRAFT LOST', color = '#ff7a4d', t = 4, explode = true } = {}) {
     if (this.crash) return;
+    this.cop.disengage(null); this.cop.say(`${title.toLowerCase()}. ${msg}`, 3);
     this.crash = { t }; this.respawns++;
     stat('crashes');
     this.toast(title, msg, color, t * 1000);
@@ -245,7 +300,8 @@ export class Explore {
   // ------------------------------------------------------------------ nav computer
   openNav() {
     const here = this.locId;
-    this.navRows = LOCATION_INFO.filter((l) => l.id !== here).map((l) => {
+    if (locInfo(here).nav === false) { this.toast('NAV COMPUTER', this.loc.launch ? 'reach orbit first' : 'there is no route out of here', '', 2200); return; }
+    this.navRows = LOCATION_INFO.filter((l) => l.id !== here && l.nav !== false).map((l) => {
       let ok = locationUnlocked(l), note = '';
       if (here === 'gargantua') { ok = false; note = 'another galaxy — return through the wormhole'; }
       else if (l.id === 'gargantua') { ok = false; note = 'reachable only through the wormhole at Saturn'; }
@@ -301,7 +357,7 @@ export class Explore {
     const { engine, hud } = this.ctx;
     const L = this.loc, s = this.ship, def = this.def;
     this.t += dt; this.mt += dt; stat('time', dt);
-    this.pollPad();
+    this.pollPad(); this.interactHeld = false;
     const tg = this.targets()[this.tgtI % this.targets().length];
     const tPos = this.tpos(tg), tVel = tg.body ? tg.body.vel : V();
     const relVel = s.vel.clone().sub(tVel);
@@ -318,30 +374,31 @@ export class Explore {
     // controls + physics
     if (this.crash) {
       this.crash.t -= dt; s.w.multiplyScalar(0.95);
-      if (this.crash.t <= 0) { this.crash = null; this.respawn(); }
+      if (this.crash.white) engine.fx.uWhite.value = Math.max(engine.fx.uWhite.value, clamp(1 - this.crash.t / this.crash.T) ** 2 + dt * 0.6);
+      if (this.crash.t <= 0) { const then = this.crash.then; this.crash = null; if (then) { then(); return; } this.respawn(); }
     }
+    this.cop.update(dt, tg, dRaw, relVel);
+    const W = this.warps(); this.warpI = Math.min(this.warpI, W.length - 1);
+    s.simScale = L.warpAlways && !this.crash ? W[this.warpI] : 1;
     const fuel0 = s.fuel;
     const accel = this.crash ? V() : s.control(this.input, dt, relVel, sasDir);
-    if (fuel0 > 0 && s.fuel <= 0) { award('dryTanks'); this.toast('TANKS DRY', 'no propellant: you are a satellite now · P to restart', '#ff7a4d', 5000); }
-    if (s.landed && !this.crash) {
-      const o = s.landed.obj;
-      if (s.thrustLocal.y > 0 || s.thrustLocal.z > 0) { const n = s.pos.clone().sub(o.body.pos).normalize(); s.landed = null; s.vel.copy(o.body.vel).addScaledVector(n, 1.2); s.pos.addScaledVector(n, 0.4); this.toast('LIFTOFF', '', '', 1200); }
-    }
+    if (fuel0 > 0 && s.fuel <= 0 && !L.launch) { award('dryTanks'); this.toast('TANKS DRY', 'no propellant: you are a satellite now · P to restart', '#ff7a4d', 5000); this.cop.say('Tanks are dry. We are a satellite now.', 3); }
+    if (s.landed && !this.crash && (s.thrustLocal.y > 0 || s.thrustLocal.z > 0)) this.liftoff();
     const thrusting = accel.lengthSq() > 0;
-    const warp = thrusting || this.crash ? 1 : WARPS[this.warpI];
+    const warp = this.crash ? 1 : L.warpAlways ? W[this.warpI] : thrusting ? 1 : W[this.warpI];
     const total = dt * warp;
     const sub = Math.min(240, Math.max(1, Math.ceil(total / (L.units === 'rs' ? 0.02 : 0.25))));
     for (let i = 0; i < sub; i++) s.integrate(total / sub, accel, L.gravity);
     s.rotate(dt);
-    L.update(s, total, this.t);
+    L.update(s, total, this.t, this);
     if (s.landed) { const o = s.landed.obj; s.pos.copy(s.landed.local).applyQuaternion(o.mesh.quaternion).add(o.body.pos); s.vel.copy(o.body.vel); s.quat.copy(o.mesh.quaternion).multiply(s.landed.q); s.w.set(0, 0, 0); for (const x of L.objs) x.mesh.position.copy(x.body.pos).sub(s.pos); }
     stat('distance', s.vel.length() * total * (L.units === 'rs' ? RS_KM : 0.001));
     stat('dv', s.gLoad * dt * (L.units === 'rs' ? 0 : 1));
 
     // docking
-    let interact = false;
+    let interact = false; this.dockInfo = null;
     if (!this.crash) for (const o of L.objs) if (o.dock && this.dockLogic(o, dt)) interact = true;
-    if (!interact) hud.setInteract(null);
+    if (!interact && !this.interactHeld) hud.setInteract(null);
     // landing surfaces, portals, collisions
     if (!this.crash) for (const o of this.targets()) {
       const d = this.tpos(o).distanceTo(s.pos);
@@ -370,8 +427,10 @@ export class Explore {
     // losses
     const fatal = !this.crash && L.collide(s);
     if (fatal === 'HORIZON') {
+      // not the end: inside a hole this size the tides are gentle, and someone has built something in here
       L.clock.horizon = true; award('horizon'); this.checkObjectives();
-      this.fail('no signal can leave · respawning at the wormhole', { title: 'YOU CROSSED THE EVENT HORIZON', color: '#ffd49a', explode: false }); engine.fx.uWhite.value = 1;
+      this.cop.say('We are across the horizon. Nothing gets out. I am still recording.', 3);
+      this.transit({ title: 'YOU CROSSED THE EVENT HORIZON', sub: 'no signal can leave · down is now a direction in time', color: '#ffd49a', t: 7, white: true, then: () => this.start('tesseract', 'data') });
     } else if (fatal) this.fail(fatal);
     else if (!this.crash && s.hull <= 0) this.fail(heat > 0.2 ? 'The hull burned through.' : hz ? `${hz.label} destroyed the avionics.` : 'Structural failure.');
     if (L.clock) {
@@ -387,12 +446,13 @@ export class Explore {
     rg.userData.setThrust(this.crash || s.docked ? 0 : s.main, this.t);
     rg.userData.blink(this.t);
     rg.userData.spot.intensity = s.lights ? 700 : 0;
+    this.glow.intensity += ((this.crash || s.docked ? 0 : s.main * (s.boosting ? 900 : 380) * (0.85 + 0.15 * Math.sin(this.t * 47))) - this.glow.intensity) * Math.min(1, dt * 10);
     const exploded = this.boomT != null;
     if (exploded) { this.boomT += dt; this.boom.userData.update(this.boomT, this.t); }
     rg.visible = this.cam.mode !== 1 && !exploded;
     if (this.crash || s.docked) this.jets.userData.off(); else this.jets.userData.update(s.rcsLocal, s.torque, this.t);
     const medium = L.units === 'm' ? relVel : s.vel.clone().multiplyScalar(400 / C_GAME);
-    this.dust.visible = settings.dust; if (settings.dust) this.dust.userData.update(medium, dt);
+    this.dust.visible = settings.dust && !L.launch; if (this.dust.visible) this.dust.userData.update(medium, dt);
     this.plasma.userData.update(s.vel.lengthSq() > 0 ? s.vel.clone().normalize() : V(0, 0, 1), this.crash ? 0 : this.heat, this.t);
     s.velRelRender = L.units === 'm' ? relVel : V();
     const tRel = L.units === 'rs' ? toT.clone().multiplyScalar(3000) : tPos.clone().sub(s.pos);
@@ -409,7 +469,7 @@ export class Explore {
       this.drawMfd(tg, dRaw, relVel);
     }
     engine.setLayers([...L.layers, this.cockpitLayer]);
-    this.sfx?.set(this.crash || s.docked ? 0 : s.main, s.rcsLevel, s.boosting ? 1 : 0, this.heat);
+    this.sfx?.set(this.crash || s.docked ? 0 : s.main, s.rcsLevel, s.boosting || (L.launch && s.stage === 0) ? 1 : 0, this.heat);
 
     // ---- HUD
     this.updateMarkers(cam, tg, relVel);
@@ -423,9 +483,10 @@ export class Explore {
       ['TARGET', tg.name, 'ok'], ['TARGET DISTANCE', dTxt], ['RELATIVE SPEED', vu(relVel.length())], ['CLOSING RATE', vu(closing), closing > 0 ? '' : 'warn'],
       ['THRUST', `${fmt.n(g, 2)} g${s.boosting ? ' · BOOST' : ''}`], ['TIME WARP', `×${warp}`], ['CAMERA', this.cam.name],
     ];
+    if (this.cop.on) rows.unshift(['AUTOPILOT', this.cop.label, 'ok']);
     if (s.docked) rows.unshift(['STATUS', 'DOCKED · resupplying · U to undock', 'ok']);
     if (s.landed) rows.unshift(['STATUS', 'LANDED · R or W to lift off', 'ok']);
-    hud.setTelemetry(rows, rs ? 'Paczyński–Wiita gravity · dτ/dt = √(1 − r_s/r)·√(1 − v²/c²)' : 'velocity-Verlet integration · every craft in its own Keplerian orbit', performance.now() / 1000);
+    hud.setTelemetry(rows, L.launch ? 'thrust, mass flow and drag per stage · closed-loop gravity turn' : L.tesseract ? 'no gravity you can feel · time is laid out like space' : rs ? 'Paczyński–Wiita gravity · dτ/dt = √(1 − r_s/r)·√(1 − v²/c²)' : 'velocity-Verlet integration · every craft in its own Keplerian orbit', performance.now() / 1000);
     hud.setCamMode(`${this.cam.name}  ·  [C] change`);
     hud.setClock(`${def.name} · ${this.mission ? `CONTRACT ${fmt.time(this.mt).slice(3)} / PAR ${fmt.time(this.mission.par).slice(3)}` : `FREE ROAM ${fmt.time(this.t)}`}${warp > 1 ? ` · WARP ×${warp}` : ''}`);
     if (rs) { hud.showMinimap(true); drawSystem(hud.mctx, s.pos, { highlight: tg.id, label: `YOUR ${def.name}` }); } else hud.showMinimap(false);
@@ -437,21 +498,23 @@ export class Explore {
     const s = this.ship, d = this.dom, def = this.def;
     const hp = s.hull / def.hull;
     d.fuel.style.width = `${s.fuel * 100}%`; d.fuel.className = s.fuel < 0.15 ? 'bad' : '';
-    d.fuelT.textContent = settings.infiniteFuel ? '∞' : rs ? `${fmt.n(s.fuel * 100, 0)}%` : `${fmt.n(s.dv, 0)} m/s`;
+    d.fuelT.textContent = settings.infiniteFuel ? '∞' : rs ? `${fmt.n(s.fuel * 100, 0)}%` : this.loc.launch ? `${s.stageName} ${fmt.n(s.fuel * 100, 0)}%` : `${fmt.n(s.dv, 0)} m/s`;
     d.hull.style.width = `${hp * 100}%`; d.hull.className = hp < 0.3 ? 'bad' : hp < 0.6 ? 'mid' : '';
     d.hullT.textContent = `${fmt.n(hp * 100, 0)}%`;
     const thr = s.main > 0 ? Math.max(s.throttle, this.input.down('w') ? 1 : 0) : 0;
     d.thr.style.width = `${thr * 100}%`; d.thrT.textContent = s.throttle > 0 ? `HOLD ${fmt.n(s.throttle * 100, 0)}%` : thr ? 'BURN' : 'IDLE';
-    const modes = `<span class="${s.sas ? 'on' : ''}">AP ${SAS_MODES[s.sas]}${s.sasErr != null ? ` ${fmt.n((s.sasErr * 180) / Math.PI, 0)}°` : ''}</span><span class="${s.fa ? 'on' : ''}">ASSIST</span><span class="${s.lights ? 'on' : ''}">LIGHTS</span><span>${rankInfo().name}</span>`;
+    const ap = this.cop.on ? `${this.cop.label}  ·  [Enter] or any flight key takes it back` : '';
+    if (ap !== this._ap) { d.ap.textContent = ap; d.ap.classList.toggle('show', !!ap); this._ap = ap; }
+    const modes = `<span class="${s.sas || this.cop.on ? 'on' : ''}">${this.cop.on ? 'TARS FLYING' : `AP ${SAS_MODES[s.sas]}`}${s.sasErr != null ? ` ${fmt.n((s.sasErr * 180) / Math.PI, 0)}°` : ''}</span><span class="${s.fa ? 'on' : ''}">ASSIST</span><span class="${s.lights ? 'on' : ''}">LIGHTS</span><span>${rankInfo().name}</span>`;
     if (modes !== this._modes) { d.modes.innerHTML = modes; this._modes = modes; }
     const w = [];
     if (s.fuel <= 0 && !settings.infiniteFuel) w.push('TANKS DRY'); else if (s.fuel < 0.15) w.push('LOW PROPELLANT');
     if (hp < 0.3) w.push('HULL CRITICAL');
     if (this.heat > 0.05) w.push('ATMOSPHERIC HEATING');
     if (hz) w.push(hz.label);
-    if (this.loc.mu && !s.landed) { const o = this.orb(); const floor = this.loc.atmo ? this.loc.atmo.top : 0; if (o.altPe < floor && o.alt < floor * 4 + 3e5 && this.heat <= 0.05) w.push(this.loc.atmo ? 'PERIAPSIS IN ATMOSPHERE' : 'IMPACT TRAJECTORY'); }
+    if (this.loc.mu && !s.landed && !this.loc.launch) { const o = this.orb(); const floor = this.loc.atmo ? this.loc.atmo.top : 0; if (o.altPe < floor && o.alt < floor * 4 + 3e5 && this.heat <= 0.05) w.push(this.loc.atmo ? 'PERIAPSIS IN ATMOSPHERE' : 'IMPACT TRAJECTORY'); }
     const wt = w.join('  ·  ');
-    if (wt !== this._warn) { d.warn.textContent = wt; this._warn = wt; if (wt) this.sfx?.ping(440, 0.25, 0.1); }
+    if (wt !== this._warn) { d.warn.textContent = wt; this._warn = wt; if (wt) { this.sfx?.ping(440, 0.25, 0.1); this.cop.once(`warn:${w[w.length - 1]}`, `Warning. ${w[w.length - 1].toLowerCase().split(' · ')[0]}.`, 20, 2); } }
   }
 
   checkObjectives() {
@@ -462,13 +525,16 @@ export class Explore {
     this.done[i] = true; this.renderObjectives();
     this.sfx?.ping(784, 0.15, 0.16); this.sfx?.ping(1175, 0.3, 0.14, 0.14);
     if (this.done.every(Boolean)) this.finishMission();
-    else this.toast('OBJECTIVE COMPLETE', o.text, '#8fe3c0');
+    else { this.toast('OBJECTIVE COMPLETE', o.text, '#8fe3c0'); this.cop.say(`Objective complete. Next: ${this.objectives[i + 1].text.replace(/\s*\(.*?\)/g, '').trim()}.`, 2); }
   }
 
   finishMission() {
-    const m = this.mission, s = this.ship, time = this.mt;
+    const m0 = this.mission, s = this.ship, time = this.mt;
+    const m = settings.easy ? { ...m0, par: m0.par * 1.5 } : m0; // pilot aids: more time on the clock
     const hp = s.hull / this.def.hull;
     const stars = time <= m.par && hp >= 0.7 && this.respawns === 0 ? 3 : time <= m.par * 2 ? 2 : 1;
+    if (m0.award) award(m0.award);
+    this.cop.say(`Contract complete. ${stars === 3 ? 'Three stars. Textbook.' : stars === 2 ? 'Two stars.' : 'One star. We made it.'}`, 3);
     const r = completeMission(missionKey(this.locId, m.id), { stars, time, xpBase: m.xp });
     const all = ALL_MISSION_KEYS.every((k) => career.missions[k]);
     if (all) award('allMissions');
@@ -481,15 +547,15 @@ export class Explore {
       <div class="rs-f">[J] next contract · [P] fly it again · keep flying in free roam</div>`;
     this.dom.result.classList.remove('hidden');
     clearTimeout(this._rt); this._rt = setTimeout(() => this.dom.result.classList.add('hidden'), 14000);
-    this.lastMission = m; this.mission = null; this.objectives = []; this.done = [];
+    this.lastMission = m0; this.mission = null; this.objectives = []; this.done = [];
     this.renderObjectives();
   }
 
   touch(o) {
     const s = this.ship, info = this.surfaceInfo(o);
     if (info.alt > 0) return;
-    const vr = s.vel.clone().sub(o.body.vel), sp = vr.length();
-    if (sp < 4) {
+    const vr = s.vel.clone().sub(o.body.vel), sp = vr.length(), soft = settings.easy ? 7 : 4;
+    if (sp < soft) {
       s.quat.premultiply(new THREE.Quaternion().setFromUnitVectors(s.up(), info.n)).normalize();
       const inv = o.mesh.quaternion.clone().invert();
       s.landed = { obj: o, local: info.local.clone().setLength(info.R + s.def.gear), q: inv.clone().multiply(s.quat) };
@@ -500,8 +566,8 @@ export class Explore {
     } else if (sp < 16) {
       const vn = vr.dot(info.n); vr.addScaledVector(info.n, -1.5 * vn).multiplyScalar(0.6);
       s.vel.copy(o.body.vel).add(vr); s.pos.addScaledVector(info.n, -info.alt + 0.1);
-      s.damage((sp - 4) * 7); this.cam.kick(1.2); this.sfx?.thud(0.9);
-      this.toast('HARD CONTACT', `${fmt.n(sp, 1)} m/s — land under 4 m/s`, '#ff7a4d', 2500);
+      s.damage((sp - soft) * 7); this.cam.kick(1.2); this.sfx?.thud(0.9);
+      this.toast('HARD CONTACT', `${fmt.n(sp, 1)} m/s — land under ${soft} m/s`, '#ff7a4d', 2500);
     } else this.fail(`Impact on ${o.name} at ${fmt.n(sp, 0)} m/s.`);
   }
 
@@ -522,11 +588,13 @@ export class Explore {
     const mine = def.dockAxis.clone().applyQuaternion(s.quat);
     const align = mine.dot(axis.clone().negate());
     const p = portPos.clone().sub(s.pos).project(this.ctx.engine.camera);
-    const ok = d < 2 && vrel < 0.5 && align > Math.cos((12 * Math.PI) / 180);
+    const vMax = settings.easy ? 1.0 : 0.5, aMax = settings.easy ? 25 : 12;
+    const ok = d < 2 && vrel < vMax && align > Math.cos((aMax * Math.PI) / 180);
+    this.dockInfo = { d, vrel, deg: (Math.acos(clamp(align, -1, 1)) * 180) / Math.PI };
     this.ctx.hud.setInteract({
       title: `DOCKING · ${o.name} PORT`,
       body: `Collar to port <b>${fmt.n(d, 2)} m</b> · rel. speed <b>${fmt.n(vrel, 2)} m/s</b> · alignment <b>${fmt.n((Math.acos(clamp(align, -1, 1)) * 180) / Math.PI, 1)}°</b>`,
-      hint: `${def.dockAxis.z ? 'Point the nose at the port' : 'Roll so the dorsal collar faces the port'} · X matches velocity · approach < 0.5 m/s`,
+      hint: `${def.dockAxis.z ? 'Point the nose at the port' : 'Roll so the dorsal collar faces the port'} · X matches velocity · approach < ${vMax} m/s · Enter: TARS docks it`,
       progress: clamp(1 - d / 70), color: ok ? '#8fe3c0' : '#ffd49a',
       reticle: p.z < 1 ? { x: 0.5 + p.x * 0.5, y: 0.5 - p.y * 0.5, ok } : null,
     });
@@ -536,10 +604,10 @@ export class Explore {
       stat('dockings'); award('firstDock'); if (vrel < 0.1) award('softTouch'); addXp(60, 'docking');
       this.cam.kick(0.3); this.sfx?.thud(0.5);
       this.toast('HARD DOCK', `capture latches engaged · ${o.name} is resupplying your ship`, '#8fe3c0', 4000);
-    } else if (d < 1.0 && vrel >= 0.5) {
+    } else if (d < 1.0 && vrel >= vMax) {
       // too fast: bounce off the port
       const n = collar.clone().sub(portPos).normalize(); const vr = s.vel.clone().sub(o.body.vel);
-      if (vr.dot(n) < 0) { s.vel.addScaledVector(n, -1.5 * vr.dot(n)); s.damage((vrel - 0.5) * 10); this.cam.kick(0.8); this.sfx?.thud(0.8); this.toast('DOCKING ABORT', `${fmt.n(vrel, 1)} m/s is too fast`, '#ff7a4d', 1800); }
+      if (vr.dot(n) < 0) { s.vel.addScaledVector(n, -1.5 * vr.dot(n)); s.damage((vrel - vMax) * 10); this.cam.kick(0.8); this.sfx?.thud(0.8); this.toast('DOCKING ABORT', `${fmt.n(vrel, 1)} m/s is too fast`, '#ff7a4d', 1800); }
     }
     return true;
   }

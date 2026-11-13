@@ -35,6 +35,8 @@ export const ACHIEVEMENTS = {
   photo: ['Pale Blue Dot', 'Take a photograph'],
   fleet: ['Test Pilot', 'Fly every spacecraft'],
   speed: ['Half Light', 'Exceed 0.5 c'],
+  orbit: ['Go for Launch', 'Fly from the pad to orbit'],
+  tesseract: ['The Bulk', 'Send the quantum data home from inside Gargantua'],
 };
 
 const fresh = () => ({ xp: 0, ship: 'ranger', missions: {}, ach: {}, codex: {}, visited: {}, flown: {}, unlockedLoc: {},

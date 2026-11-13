@@ -8,8 +8,22 @@ Three.js + custom GLSL. Every scene is a pure function of the music's time, so s
 npm install
 npm run dev        # http://127.0.0.1:5173
 ```
-Use Chrome, fullscreen (F), headphones. The main menu offers **Flight Operations** (the game), **Hangar**, **Pilot Record**, **The Journey** (the 15-minute film), **Settings** and **Controls**. Esc opens the menu at any time.
+Use Chrome, fullscreen (F), headphones. The main menu offers **Launch from Earth**, **Flight Operations** (the game), **Hangar**, **Pilot Record**, **The Journey** (the 15-minute film), **Settings** and **Controls**. Esc opens the menu at any time.
 `?t=455` jumps straight into the journey at a given second.
+
+## TARS, the copilot
+The game is hard to fly by hand on purpose, so there is a copilot that can fly all of it.
+
+- **Enter** hands the ship to TARS. In a contract it flies the current objective, then the next, to the end: rendezvous, docking, landing, two-burn orbit changes (it time-warps the coasts), the launch, the black-hole dives. In free roam it docks with, lands on, enters or approaches whatever is targeted. Enter again, or any flight key, takes the ship back.
+- **TARS talks** (speech synthesis, with subtitles): alignment and range callouts while you or it are flying (“ten degrees… five… three… aligned”, “thrust sixty percent”, “five metres”), altitude and pitch during the ascent, warnings, time dilation near Gargantua. **Y** asks it what to do next, **I** gets a status report.
+- **O** turns on voice commands (Chrome's speech recognition; it asks for the microphone). Say *autopilot*, *dock*, *land*, *approach*, *brake*, *prograde*, *retrograde*, *full throttle*, *throttle fifty*, *cut engines*, *target Hubble*, *scan*, *status*, *launch*, *stage*, *I have control*.
+- *Settings → Gameplay → Pilot aids* (on by default) widens the docking and landing limits, halves damage and adds half again to the par times.
+
+## Launch from Earth
+A Saturn V on LC-39A, playable. **Space** starts the engines; the stack is held down until thrust exceeds weight. Each stage has its own thrust, specific impulse and propellant mass (the numbers the film's ascent uses), drag follows an exponential atmosphere, and flying sideways through max-Q breaks the vehicle. **Space** drops a spent stage and lights the next; once periapsis clears 150 km, **Space** releases the Ranger and the flight continues as a rendezvous with the Endurance. **T** runs the whole ascent at ×2, ×4 or ×8. TARS flies a closed-loop gravity turn to a 185 km orbit if you press Enter.
+
+## The tesseract
+Crossing Gargantua's event horizon no longer ends the flight, and neither does the end of the film: at 14:56 you fall into the tesseract and play on. Inside, in a suit, with no gravity and no up: collect five fragments of quantum data, find the one lit window, and key ten gravity pulses across in time with the bar (**Space**). Then the tesseract closes and lets you go near Saturn.
 
 ## Flight Operations (the game)
 Pick a world, a contract and a spacecraft, then fly it with six-degree-of-freedom Newtonian physics. Click to capture the mouse, which works as a virtual stick for pitch and yaw. Progress (XP, rank, stars, achievements, codex) is saved in this browser.
@@ -17,21 +31,25 @@ Pick a world, a contract and a spacecraft, then fly it with six-degree-of-freedo
 **Worlds**
 | World | What is there |
 |---|---|
+| Cape Canaveral | The launch (above). |
 | Earth orbit | 400 km orbit (μ⊕ = 3.986 × 10¹⁴ m³/s²) with the Endurance, ISS and Hubble, each on its own Keplerian orbit. Atmosphere below 125 km heats and drags you. |
 | The Moon | 100 km low lunar orbit, a dockable Gateway station, Earth in the sky. |
 | Mars · Phobos | Co-orbiting Phobos at 9,376 km. Phobos has its own gravity (μ = 7.09 × 10⁵ m³/s²) and you can land on it under 4 m/s. |
 | Jupiter | 14,000 km above the cloud tops with Juno. Radiation flux rises steeply as you descend and damages the hull. |
 | Saturn | Inside the A ring among ice boulders, with Cassini and the wormhole. |
 | Gargantua | Distances in Schwarzschild radii, Paczyński–Wiita gravity, a speed of light, ship and Earth clocks at dτ/dt = √(1 − r_s/r)·√(1 − v²/c²). Reached through the wormhole. |
+| The Tesseract | Inside the horizon (above). Unlocked by crossing it, or by watching The Journey to the end. |
 
 **Spacecraft** (Hangar): Ranger (all-rounder), Pilgrim (capsule: strong RCS and heat shield, docks nose-first), Lander (four engines, 20 km/s of Δv, tough), Kestrel (fast, agile, fragile). Each has its own thrust, turn rate, Δv budget, hull strength and heat tolerance.
 
-**Career**: 18 contracts scored one to three stars against a par time, hull condition and restarts; XP and seven ranks unlock ships and worlds; 20 achievements; a codex filled by scanning objects; a logbook. *Settings → Gameplay* has unlimited propellant, an indestructible hull and a sandbox switch that unlocks everything.
+**Career**: 22 contracts scored one to three stars against a par time, hull condition and restarts; XP and seven ranks unlock ships and worlds; 22 achievements; a codex filled by scanning objects; a logbook. *Settings → Gameplay* has unlimited propellant, an indestructible hull and a sandbox switch that unlocks everything.
 
 **Systems**: propellant is a Δv budget (every m/s of thrust is a m/s spent), hull damage from collisions, hard landings, heating and radiation, resupply while docked, an orbit map with your conic and apsides, and a nav computer that quotes the real Hohmann transfer between worlds.
 
 | Key | Action |
 |---|---|
+| Enter · Y · I · O | TARS flies it · ask TARS · status report · voice commands |
+| Space | Launch: ignite, stage, separate · Tesseract: key a pulse |
 | W / S · Shift | Main engines / retro · boost |
 | A / D · R / F · Q / E | Lateral · vertical RCS · roll |
 | [ / ] · Z · Backspace | Throttle hold ∓10 % · full · cut |
@@ -47,7 +65,7 @@ Pick a world, a contract and a spacecraft, then fly it with six-degree-of-freedo
 
 A standard gamepad also works: sticks for attitude and RCS, triggers for engines, bumpers for roll.
 
-URL shortcuts: `?explore=earth|moon|mars|jupiter|saturn|gargantua`, plus optional `&mission=<id>` and `&ship=ranger|capsule|lander|scout`.
+URL shortcuts: `?explore=launch|earth|moon|mars|jupiter|saturn|gargantua|tesseract`, plus optional `&mission=<id>` and `&ship=ranger|capsule|lander|scout`.
 
 ## Settings
 Quality presets (Low / Medium / High / Ultra) plus individual controls: resolution scale, dynamic resolution, shadow map size, black-hole ray-tracing quality, bloom, lens flares, film grain, 8K Earth texture, FOV, camera shake, letterbox, HUD, radio dialogue, movie or physical Gargantua, mouse sensitivity, invert pitch, flight assist, music and engine volume. Settings are saved in this browser.
@@ -85,6 +103,7 @@ The autopilot assists more and more as each deadline approaches, so the journey 
 | 9:42 | Gargantua pass, Mann's frozen world |
 | 12:22 | Mann's docking, explosion, spin-match docking |
 | 13:52 | Slingshot, detach, the horizon, spaghettification, the tesseract |
+| 14:56 | The film ends; the tesseract level begins |
 
 ## Real data & physics
 - **Planet positions:** live NASA/JPL Horizons state vectors (proxied by Vite at `/horizons`), with a fallback to JPL Keplerian mean elements offline.

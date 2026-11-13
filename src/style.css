@@ -221,3 +221,20 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #000; colo
 .rs-r { display: flex; justify-content: space-between; font-size: 11px; line-height: 2; letter-spacing: .08em; } .rs-r span { color: var(--dim); letter-spacing: .25em; font-size: 9.5px; } .rs-r b { font-weight: 300; } .rs-r small { color: var(--dim); }
 .rs-f { font-size: 9.5px; letter-spacing: .1em; color: var(--dim); margin-top: 14px; }
 @media (max-width: 900px) { #fl-keys { display: none; } #fl-status { width: 300px; } }
+
+/* ---- TARS: autopilot banner, subtitles, microphone ---- */
+#fl-ap { position: absolute; left: 50%; top: 96px; transform: translateX(-50%); font-size: 11px; letter-spacing: .32em; color: var(--ok); padding: 8px 18px; border: 1px solid rgba(143,227,192,.5); background: rgba(0,0,0,.45); backdrop-filter: blur(4px); white-space: nowrap; opacity: 0; transition: opacity .4s; }
+#fl-ap.show { opacity: 1; animation: appulse 2.4s ease-in-out infinite; }
+@keyframes appulse { 50% { box-shadow: 0 0 22px rgba(143,227,192,.35); } }
+#fl-tars { position: absolute; left: 50%; bottom: 176px; transform: translateX(-50%); max-width: min(760px, 72vw); text-align: center; font-family: var(--sans, Inter, sans-serif); font-size: 15px; font-weight: 300; line-height: 1.5; letter-spacing: .02em; color: #fff; text-shadow: 0 1px 8px #000, 0 0 2px #000; opacity: 0; transition: opacity .5s; }
+#fl-tars.show { opacity: 1; }
+#fl-tars span { font-family: var(--mono); font-size: 9px; letter-spacing: .35em; color: var(--accent); margin-right: 12px; vertical-align: middle; }
+#fl-mic { position: absolute; right: 32px; bottom: 300px; font-size: 9px; letter-spacing: .3em; color: var(--dim); opacity: .0; transition: opacity .3s; }
+#fl-mic.on { opacity: 1; color: var(--warn); animation: flwarn 1.6s steps(2, start) infinite; }
+#fl-keys b { color: var(--ok); font-weight: 400; }
+#interact-body b { margin-right: 4px; letter-spacing: .12em; }
+.loc-launch::before { background: radial-gradient(ellipse at 80% 110%, #ffb36b 0%, #7a3a18 26%, #10233f 55%, transparent 78%); }
+.loc-tesseract::before { background: repeating-linear-gradient(90deg, rgba(255,190,110,.22) 0 1px, transparent 1px 22px), repeating-linear-gradient(0deg, rgba(255,190,110,.18) 0 1px, transparent 1px 22px), radial-gradient(circle at 70% 90%, #6a4420 0%, transparent 70%); }
+#fl-help { position: absolute; left: 50%; bottom: 146px; transform: translateX(-50%); font-size: 9px; letter-spacing: .12em; color: var(--dim); white-space: nowrap; }
+#fl-help b { color: var(--ok); font-weight: 400; }
+#flight.nokeys #fl-help { display: none; }

@@ -3,12 +3,12 @@
 // gravity turn in stage 1, then a linear pitch program to orbit insertion.
 
 const MU = 3.986004418e14, RE = 6371000, G0 = 9.80665;
-const STAGES = [
+export const STAGES = [
   { F: 35.1e6, isp: 263, mProp: 2.15e6, mDry: 0.135e6, burn: 161 },
   { F: 5.14e6, isp: 421, mProp: 0.444e6, mDry: 0.036e6, burn: 360 },
   { F: 1.03e6, isp: 421, mProp: 0.075e6, mDry: 0.012e6, burn: 160 },
 ];
-const PAYLOAD = 0.05e6;
+export const PAYLOAD = 0.05e6;
 
 export function simulateAscent({ dt = 0.1, tEnd = 720, kickV = 60, kickDeg = 1.6 } = {}) {
   let m = PAYLOAD + STAGES.reduce((s, x) => s + x.mProp + x.mDry, 0);
@@ -64,4 +64,21 @@ export function sampleAscent(sim, t) {
   for (const k in a) o[k] = typeof a[k] === 'number' ? a[k] + (b[k] - a[k]) * f : a[k];
   o.stage = a.stage;
   return o;
+}
+
+/**
+ * Closed-loop ascent guidance used by the playable launch (and by TARS when it flies it).
+ * st: { h, v, vUp, vE, r, stage, aT (thrust acceleration available) } -> { pitch (rad above the local horizon), thr, cut }
+ * Stage 1: vertical rise, a 2.2° kick, then a gravity turn. Upper stages: hold 185 km with a critically damped
+ * vertical channel and spend everything else on horizontal speed; cut off at circular velocity.
+ */
+export function ascentGuidance(st) {
+  const { h, v, vUp, vE, r, stage, aT } = st;
+  const gamma = Math.atan2(vUp, Math.max(vE, 1e-3));
+  if (v < 60) return { pitch: Math.PI / 2, thr: 1, cut: false };
+  if (stage === 0) return { pitch: v < 110 ? Math.PI / 2 - (2.2 * Math.PI) / 180 : Math.max(gamma, 0), thr: 1, cut: false };
+  const tau = 60, aV = (185e3 - h) / (tau * tau) - (2 * vUp) / tau;
+  const need = aV + MU / (r * r) - (vE * vE) / r;
+  const vc = Math.sqrt(MU / r);
+  return { pitch: Math.asin(Math.max(-0.35, Math.min(0.85, need / Math.max(aT, 0.1)))), thr: Math.max(0.05, Math.min(1, (vc - vE) / 60)), cut: vE >= vc - 1 && h > 150e3 };
 }
